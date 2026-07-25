@@ -1,0 +1,7 @@
+{
+  "name": "solarsquare-lead-sentinel",
+  "version": "1.0.0",
+  "description": "SolarSquare Lead Sentinel — TL daily lead-audit tool",
+  "engines": { "node": ">=18" },
+  "dependencies": { "googleapis": "^144.0.0" }
+}
