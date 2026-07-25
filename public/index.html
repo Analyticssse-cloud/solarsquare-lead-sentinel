@@ -58,7 +58,7 @@ function fetchT(url,ms){const c=new AbortController();const t=setTimeout(()=>c.a
 async function load(){
   document.getElementById('app').innerHTML='<div class="wrap" style="padding-top:80px;text-align:center;color:'+MUT(55)+';font-size:14px">Loading Lead Sentinel…</div>';
   let data=null;
-  try{const r=await fetchT('/api/queue');if(r.ok){const j=await r.json();if(j&&j.queue&&j.queue.length){data=j;S.src='live';}}}catch(e){}
+  try{const r=await fetchT('/api/queue',20000);if(r.ok){const j=await r.json();if(j&&j.queue&&j.queue.length){data=j;S.src='live';}}}catch(e){}
   if(!data){
     try{const [q,h]=await Promise.all([fetchT('demo/audit_queue_daily.json').then(r=>r.json()),fetchT('demo/lrm_hierarchy.json').then(r=>r.json())]);data={queue:q,hierarchy:h};S.src='demo';}
     catch(e){document.getElementById('app').innerHTML='<div class="wrap" style="padding-top:80px;color:#b2622d">Could not load data: '+esc(e.message)+'</div>';return;}
