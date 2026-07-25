@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lead Sentinel</title>
+<link rel="stylesheet" href="styles.css">
+<style>
+  body{margin:0;background:var(--color-bg);color:var(--color-text);font-family:var(--font-body)}
+  a{color:var(--color-accent)}
+  .wrap{max-width:1200px;margin:0 auto;padding:0 26px}
+  .ls-scroll::-webkit-scrollbar{height:8px}
+  .ls-scroll::-webkit-scrollbar-thumb{background:color-mix(in srgb,var(--color-text) 18%,transparent);border-radius:999px}
+  select.input{appearance:none;-webkit-appearance:none;cursor:pointer}
+  button{font-family:var(--font-body)}
+  @keyframes lsfade{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+</style>
+</head>
+<body>
+<div id="app" style="min-height:100vh;background:radial-gradient(130% 90% at 92% -20%, var(--color-accent-100) 0%, var(--color-bg) 55%)"></div>
+
+<script>
+const CATS=[
+ {key:'mcch_past',name:'Meeting confirmed · date passed',dot:'#c67139',
+  check:'The confirmed meeting (MCCH) date is before today, but the lead is still at MCCH — verify the meeting was held and moved to MD, or that a fresh date was set. A stuck MCCH is a silent MD leak.',
+  reasons:['Meeting not marked MD despite date passing','No reschedule after no-show','Stuck at MCCH >48h post-meeting','Customer met but stage not updated','No deviation — correctly handled']},
+ {key:'followup_missed',name:'Follow-up overdue',dot:'#7a8a5e',
+  check:'Follow-up date (CNC / call-later / meeting-postponed) is today or earlier, but no connect attempt is logged today. Every day cold lowers Lead→MS conversion.',
+  reasons:['No connect attempt logged today','Follow-up date not honoured','No new follow-up date set','Reassigned but not actioned','No deviation — correctly handled']},
+ {key:'not_interested',name:'Marked not interested',dot:'#b2622d',
+  check:'Lead was closed as Not Interested — confirm the real objection was captured and handled, and that it was not set to lost prematurely (before MD).',
+  reasons:['Objection not handled','No reason / objection logged','Closed before MD (too early)','No win-back attempt','No deviation — correctly handled']},
+ {key:'not_qualified',name:'Marked not qualified',dot:'#8c491a',
+  check:'Lead was closed as Not Qualified — confirm a discovery call actually happened and the disqualification criteria genuinely apply.',
+  reasons:['No discovery call logged','Qualification criteria not applied','Reason code missing','Reopen candidate','No deviation — correctly handled']},
+ {key:'mcch_future',name:'Meeting confirmed · upcoming',dot:'#728157',
+  check:'Meeting (MCCH) is confirmed for a future date — confirm the slot is logged inside the D+2 window, the customer confirmation is captured, and prep is done.',
+  reasons:['Customer confirmation not logged','Slot beyond D+2 window','No prep note sent to customer','Held / duplicate slot','No deviation — correctly handled']},
+];
+const ACTIONS=['No action needed','Re-open the lead','Reassign to another rep','Ask rep to call today','Escalate to manager'];
+const SEVS=[['low','Low'],['med','Medium'],['high','High']];
+const RULES=[
+ ['1','Pool','Every lead touched in the last 30 days, up to today.'],
+ ['2','Eligibility','Category rule applied, minus anything audited in the last 7 days — a cooldown so leads keep rotating.'],
+ ['3','Priority score','60% breach urgency + 40% rep deviation risk → P1 / P2 / P3.'],
+ ['4','Daily pick','Top 4 per category, rep-balanced and seeded to the date so the pull is reproducible.'],
+];
+const MON=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const esc=s=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const norm=e=>String(e||'').trim().toLowerCase().replace('@homes.solarsquare.in','@solarsquare.in');
+const ini2=n=>{const p=String(n||'').trim().split(/\s+/);return((p[0]&&p[0][0]||'')+(p[1]&&p[1][0]||'')).toUpperCase();};
+const fmtD=iso=>{if(!iso)return'';const d=new Date(iso);return isNaN(d)?'':d.getDate()+' '+MON[d.getMonth()];};
+const catObj=k=>CATS.find(c=>c.key===k);
+
+const S={screen:'queue',tlEmail:null,catKey:'mcch_past',selId:null,audits:{},showRules:false,model:null,src:'demo'};
+
+function fetchT(url,ms){const c=new AbortController();const t=setTimeout(()=>c.abort(),ms||3500);return fetch(url,{signal:c.signal}).finally(()=>clearTimeout(t));}
+async function load(){
+  document.getElementById('app').innerHTML='<div class="wrap" style="padding-top:80px;text-align:center;color:'+MUT(55)+';font-size:14px">Loading Lead Sentinel…</div>';
+  let data=null;
+  try{const r=await fetchT('/api/queue');if(r.ok){const j=await r.json();if(j&&j.queue&&j.queue.length){data=j;S.src='live';}}}catch(e){}
+  if(!data){
+    try{const [q,h]=await Promise.all([fetchT('demo/audit_queue_daily.json').then(r=>r.json()),fetchT('demo/lrm_hierarchy.json').then(r=>r.json())]);data={queue:q,hierarchy:h};S.src='demo';}
+    catch(e){document.getElementById('app').innerHTML='<div class="wrap" style="padding-top:80px;color:#b2622d">Could not load data: '+esc(e.message)+'</div>';return;}
+  }
+  buildModel(data.queue,data.hierarchy);
+  render();
+}
+
+function buildModel(queue,hier){
+  const H={};hier.forEach(h=>H[norm(h.rep_email)]=h);
+  const base={mcch_past:45,followup_missed:40,not_interested:52,not_qualified:52,mcch_future:34};
+  const leadsByTl={},tlMeta={};
+  queue.forEach(row=>{
+    const h=H[norm(row.rep_email)]||{};const tl=h.tl_email||'unassigned';
+    const urg=Math.max(20,Math.min(100,base[row.category]+(row.days_overdue||0)*8));
+    const lead={id:row.lead_id,cat:row.category,name:row.customer_name,loc:row.cluster,
+      meta:(row.cluster||'')+' · '+row.lead_id,rep:row.rep_name,ini:ini2(row.customer_name),repIni:ini2(row.rep_name),
+      urg:urg,days:row.days_overdue||0,tlEmail:tl,tlName:h.tl_name||'Unassigned',
+      timeline:buildTL(row),systemNote:buildNote(row)};
+    (leadsByTl[tl]=leadsByTl[tl]||[]).push(lead);
+    tlMeta[tl]=tlMeta[tl]||{name:h.tl_name||'Unassigned',ini:ini2(h.tl_name||'NA'),cluster:h.cluster||row.cluster};
+  });
+  const repsByTl={},repRiskByTl={};
+  Object.keys(leadsByTl).forEach(tl=>{
+    const ls=leadsByTl[tl],byRep={};
+    ls.forEach(l=>{(byRep[l.rep]=byRep[l.rep]||{name:l.rep,ini:l.repIni,cats:{}}).cats[l.cat]=(byRep[l.rep].cats[l.cat]||0)+1;});
+    const reps=Object.values(byRep).map(r=>{const trend=CATS.map(c=>r.cats[c.key]||0);return{name:r.name,ini:r.ini,trend,flagged:trend.reduce((a,b)=>a+b,0)};});
+    const mx=Math.max(1,...reps.map(r=>r.flagged));const rr={};reps.forEach(r=>rr[r.name]=Math.min(100,Math.round(r.flagged/mx*100)));
+    repsByTl[tl]=reps;repRiskByTl[tl]=rr;
+  });
+  const curTl=Object.keys(leadsByTl).sort((a,b)=>leadsByTl[b].length-leadsByTl[a].length)[0];
+  const tls=Object.keys(leadsByTl).map((tl,i)=>{const ls=leadsByTl[tl],m=tlMeta[tl],od=ls.filter(l=>l.days>2).length;
+    return{email:tl,name:m.name,ini:m.ini,cluster:m.cluster,total:ls.length,me:tl===curTl,
+      simAudited:tl===curTl?null:Math.max(0,ls.length-(i%3)),simDev:tl===curTl?null:od,simHigh:tl===curTl?null:Math.round(od/2),topGap:topCat(ls)};});
+  S.model={leadsByTl,repsByTl,repRiskByTl,tls,curTl};S.tlEmail=curTl;
+  const first=(leadsByTl[curTl].filter(l=>l.cat==='mcch_past').sort((a,b)=>b.urg-a.urg)[0]||leadsByTl[curTl][0]||{});
+  S.selId=first.id;
+}
+function topCat(ls){const c={};ls.forEach(l=>c[l.cat]=(c[l.cat]||0)+1);const t=Object.keys(c).sort((a,b)=>c[b]-c[a])[0];return t?catObj(t).name:'—';}
+function buildTL(row){const t=[],p=(iso,w,k)=>t.push({when:fmtD(iso),what:w,kind:k});
+  p(row.created_at,'Lead created','done');
+  if(row.category==='mcch_past'){if(row.meeting_confirmed_at)p(row.meeting_confirmed_at,'MCCH set','done');p(row.meeting_schedule_date,'Meeting due','flag');t.push({when:'today',what:'Still MCCH',kind:'pending'});}
+  else if(row.category==='mcch_future'){if(row.meeting_confirmed_at)p(row.meeting_confirmed_at,'MCCH set','done');p(row.meeting_schedule_date,'Meeting due','flag');}
+  else if(row.category==='followup_missed'){p(row.follow_up_at,'Follow-up due','flag');t.push({when:'today',what:'No attempt',kind:'pending'});}
+  else if(row.category==='not_interested'){if(row.meeting_confirmed_at)p(row.meeting_confirmed_at,'MCCH set','done');p(row.status_changed_at,'Marked NI','flag');}
+  else if(row.category==='not_qualified'){if(row.qualified_at)p(row.qualified_at,'Discovery','done');p(row.status_changed_at,'Marked NQ','flag');}
+  return t;}
+function buildNote(row){const d=row.days_overdue||0;
+  if(row.category==='mcch_past')return'MCCH date '+fmtD(row.meeting_schedule_date)+' passed '+d+'d ago — still at MCCH, not moved to MD.';
+  if(row.category==='mcch_future')return'Meeting confirmed for '+fmtD(row.meeting_schedule_date)+' — verify customer confirmation logged and slot within window.';
+  if(row.category==='followup_missed')return'Follow-up '+(d?('overdue '+d+'d — due '+fmtD(row.follow_up_at)):'due today ('+fmtD(row.follow_up_at)+')')+' — no connect attempt logged today.';
+  if(row.category==='not_interested')return'Marked Not Interested on '+fmtD(row.status_changed_at)+(row.meeting_confirmed_at?' — confirm the objection was captured.':' — closed before any meeting.');
+  if(row.category==='not_qualified')return'Marked Not Qualified on '+fmtD(row.status_changed_at)+(row.qualified_at?' after a discovery call.':' — no discovery call logged.');
+  return'';}
+
+// ---- data accessors ----
+const L=()=>S.model?(S.model.leadsByTl[S.tlEmail]||[]):[];
+const R=()=>S.model?(S.model.repsByTl[S.tlEmail]||[]):[];
+const TLS=()=>S.model?S.model.tls:[];
+function repRisk(rep){const m=S.model;if(!m)return 50;const map=m.repRiskByTl[S.tlEmail]||{};return map[rep]!=null?map[rep]:50;}
+function prio(id){const lead=L().find(l=>l.id===id);if(!lead)return{score:0,tier:'P3',urg:0,repRisk:0};
+  const rr=repRisk(lead.rep),u=lead.urg||0,score=Math.round(0.6*u+0.4*rr);
+  return{score,tier:score>=70?'P1':score>=55?'P2':'P3',urg:u,repRisk:rr};}
+function catLeads(k){return L().filter(l=>l.cat===k).slice().sort((a,b)=>prio(b.id).score-prio(a.id).score);}
+const verdictOf=id=>S.audits[id]&&S.audits[id].verdict;
+const audited=()=>L().filter(l=>verdictOf(l.id)).length;
+function tierStyle(t,big){const c=t==='P1'?'background:var(--color-accent);color:var(--color-bg)':t==='P2'?'background:var(--color-accent-200);color:var(--color-accent-800)':'background:var(--color-accent-2-100);color:var(--color-accent-2-800)';return(big?'font-size:11px;font-weight:700;padding:3px 10px;':'font-size:10px;font-weight:700;padding:1px 7px;')+'border-radius:999px;white-space:nowrap;'+c;}
+
+// ---- render ----
+const MUT=p=>'color-mix(in srgb,var(--color-text) '+p+'%,transparent)';
+function render(){
+  const el=document.getElementById('app');
+  el.innerHTML=nav()+(S.screen==='queue'?queueView():S.screen==='adher'?adherView():mgrView());
+}
+function nav(){
+  const me=TLS().find(t=>t.me)||{name:'—',ini:'—',cluster:'—'};
+  const seg=(id,lbl)=>`<label class="seg-opt" style="${S.screen===id?'background:var(--color-accent);color:var(--color-bg)':''}"><input type="radio" style="position:absolute;opacity:0" ${S.screen===id?'checked':''} data-act="nav" data-v="${id}">${lbl}</label>`;
+  return `<nav class="wrap" style="display:flex;align-items:center;gap:20px;padding-top:18px;padding-bottom:10px">
+    <span class="nav-brand" style="display:flex;align-items:center;gap:11px;margin-right:0">
+      <span style="width:30px;height:30px;border-radius:999px;background:var(--color-accent);display:grid;place-items:center"><span style="width:12px;height:12px;border-radius:999px;border:2.75px solid var(--color-bg)"></span></span>Lead Sentinel</span>
+    <div class="seg" style="margin-left:10px">${seg('queue','Audit queue')}${seg('adher','My adherence')}${seg('mgr','Manager view')}</div>
+    <span style="flex:1"></span>
+    <span style="display:flex;align-items:center;gap:8px;padding:6px 14px;border-radius:999px;background:var(--color-surface);border:1px solid var(--color-divider)"><span style="width:8px;height:8px;border-radius:999px;background:var(--color-accent)"></span><span style="font-size:12.5px;font-weight:600;color:var(--color-accent-800)">Cutoff 7:00 PM · 3h 41m left</span></span>
+    <span style="display:flex;align-items:center;gap:10px"><span style="display:flex;flex-direction:column;text-align:right;line-height:1.25"><span style="font-size:13px;font-weight:600">${esc(me.name)}</span><span style="font-size:11px;color:${MUT(55)}">Team Lead · ${esc(me.cluster)}${S.src==='demo'?' · demo':''}</span></span><span style="width:38px;height:38px;display:grid;place-items:center;border-radius:999px;background:var(--color-accent-200);color:var(--color-accent-800);font-weight:700;font-size:13px">${esc(me.ini)}</span></span>
+  </nav>`;
+}
+function queueView(){
+  const total=L().length,done=audited(),pct=total?Math.round(done/total*100):0;
+  const tabs=CATS.map(c=>{const dl=catLeads(c.key),d=dl.filter(l=>verdictOf(l.id)).length,on=c.key===S.catKey;
+    return `<button class="btn" data-act="cat" data-v="${c.key}" style="padding:8px 14px;font-size:13px;${on?'background:var(--color-surface);border:1.5px solid var(--color-accent)':'background:transparent;border:1px solid var(--color-divider);color:'+MUT(78)}"><span style="width:10px;height:10px;border-radius:999px;background:${c.dot}"></span>${esc(c.name)}<span style="font-size:11px;font-weight:600;padding:1px 8px;border-radius:999px;background:${on?'var(--color-accent-200)':MUT(8)};color:${on?'var(--color-accent-800)':MUT(60)}">${d}/${dl.length}</span></button>`;}).join('');
+  const dl=catLeads(S.catKey);
+  const rows=dl.map(l=>{const st=verdictOf(l.id),lbl=st==='correct'?['Correct','tag tag-accent-2']:st==='deviation'?['Deviation','tag tag-accent']:['Pending','tag tag-neutral'],on=l.id===S.selId,p=prio(l.id);
+    return `<button data-act="lead" data-v="${l.id}" style="display:flex;align-items:center;gap:10px;width:100%;padding:11px 12px;border-radius:16px;cursor:pointer;text-align:left;${on?'background:var(--color-surface);border:1.5px solid var(--color-accent)':'background:color-mix(in srgb,var(--color-surface) 55%,transparent);border:1px solid var(--color-divider)'}">
+      <span style="display:flex;align-items:center;gap:11px;flex:1;min-width:0"><span style="width:34px;height:34px;flex:none;display:grid;place-items:center;border-radius:999px;background:var(--color-accent-200);color:var(--color-accent-800);font-size:12px;font-weight:700">${esc(l.repIni)}</span><span style="min-width:0;line-height:1.3"><span style="display:block;font-weight:600;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(l.name)}</span><span style="display:block;font-size:11.5px;color:${MUT(55)};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(l.loc)} · ${esc(l.rep)}</span></span></span>
+      <span style="display:flex;flex-direction:column;align-items:flex-end;gap:5px;flex:none"><span style="${tierStyle(p.tier,0)}">${p.tier}</span><span class="${lbl[1]}">${lbl[0]}</span></span></button>`;}).join('');
+  return `<div class="wrap" style="padding-bottom:44px;animation:lsfade .25s ease">
+    <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:24px;flex-wrap:wrap;padding:14px 0 18px">
+      <div><h2 style="margin:0;font-size:30px">Today's audit</h2><div style="font-size:13.5px;color:${MUT(60)}">Friday, 25 Jul 2026 · system-picked from the last 30 days · ${total} leads across 5 categories</div></div>
+      <div style="display:flex;align-items:center;gap:14px"><span style="width:220px;height:10px;border-radius:999px;background:${MUT(9)};overflow:hidden"><span style="display:block;height:100%;width:${pct}%;background:var(--color-accent-2);border-radius:999px"></span></span><span style="font-size:12.5px;font-weight:600;white-space:nowrap">${done} / ${total} audited</span></div>
+    </div>
+    <div style="padding-bottom:16px"><button class="btn btn-secondary" data-act="rules" style="font-size:12.5px">How the system samples these leads ${S.showRules?'▴':'▾'}</button>
+      ${S.showRules?`<div class="card elev-sm" style="margin-top:12px;padding:20px 22px"><div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px">${RULES.map(s=>`<div style="display:flex;flex-direction:column;gap:7px"><span style="display:flex;align-items:center;gap:9px"><span style="width:24px;height:24px;display:grid;place-items:center;border-radius:999px;background:var(--color-accent-2);color:var(--color-bg);font-size:12px;font-weight:700">${s[0]}</span><span style="font-weight:700;font-size:13.5px">${s[1]}</span></span><span style="font-size:12px;line-height:1.5;color:${MUT(68)}">${s[2]}</span></div>`).join('')}</div></div>`:''}</div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;padding-bottom:18px">${tabs}</div>
+    <div style="display:grid;grid-template-columns:296px 1fr;gap:22px;align-items:start">
+      <div style="display:flex;flex-direction:column;gap:12px"><div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:${MUT(55)};padding-left:2px">${esc(catObj(S.catKey).name)} · ${dl.length} leads</div>${rows}</div>
+      ${auditPanel()}
+    </div></div>`;
+}
+function auditPanel(){
+  const l=L().find(x=>x.id===S.selId)||{timeline:[]};if(!l.id)return'<div></div>';
+  const cat=catObj(S.catKey),a=S.audits[l.id]||{},p=prio(l.id),dl=catLeads(S.catKey),rank=dl.findIndex(x=>x.id===l.id)+1;
+  const tl=l.timeline.map((r,i)=>{const dot=r.kind==='flag'?'width:17px;height:17px;border-radius:999px;background:var(--color-bg);border:3px solid var(--color-accent);box-shadow:0 0 0 4px var(--color-accent-100)':r.kind==='pending'?'width:14px;height:14px;border-radius:999px;background:transparent;border:2px solid '+MUT(26):'width:14px;height:14px;border-radius:999px;background:var(--color-accent-2)';
+    const conn=i>0?`<span style="flex:1;height:2px;margin-top:7px;min-width:20px;${r.kind==='done'?'background:var(--color-accent-2)':'background:repeating-linear-gradient(90deg,var(--color-accent) 0 6px,transparent 6px 12px)'}"></span>`:'';
+    return conn+`<span style="display:flex;flex-direction:column;align-items:center;gap:9px;width:96px;flex:none"><span style="${dot}"></span><span style="font-size:10.5px;line-height:1.4;text-align:center;color:${r.kind==='flag'?'var(--color-accent-800)':MUT(60)}">${esc(r.what)}<br><span style="opacity:.7">${esc(r.when)}</span></span></span>`;}).join('');
+  const vb=(on,ac)=>`flex:1;padding:13px 8px;font-size:14px;border:1.5px solid ${on?(ac==='c'?'var(--color-accent-2);background:var(--color-accent-2-100);color:var(--color-accent-2-800)':'var(--color-accent);background:var(--color-accent-200);color:var(--color-accent-800)'):MUT(16)+';color:'+MUT(80)}`;
+  const factors=[['Urgency',p.urg],['Rep risk',p.repRisk]].map(f=>`<span style="display:flex;flex-direction:column;gap:4px;width:78px"><span style="display:flex;justify-content:space-between;gap:6px"><span style="font-size:10px;color:${MUT(55)}">${f[0]}</span><span style="font-size:10px;font-weight:700">${f[1]}</span></span><span style="height:5px;border-radius:999px;background:${MUT(9)};overflow:hidden"><span style="display:block;height:100%;width:${f[1]}%;background:var(--color-accent);border-radius:999px"></span></span></span>`).join('');
+  let dev='';
+  if(a.verdict==='deviation'){
+    const sev=SEVS.map(s=>`<button class="btn" data-act="sev" data-v="${s[0]}" style="padding:8px 14px;font-size:12.5px;border:1.5px solid ${a.sev===s[0]?'var(--color-accent);background:var(--color-accent-100);color:var(--color-accent-800)':MUT(16)+';color:'+MUT(65)}">${s[1]}</button>`).join('');
+    dev=`<div style="display:flex;flex-direction:column;gap:16px;background:var(--color-accent-100);border-radius:18px;padding:18px;animation:lsfade .2s ease">
+      <div style="display:grid;grid-template-columns:1fr auto;gap:16px;align-items:end">
+        <div class="field"><label>Deviation reason</label><select class="input" data-act="reason">${cat.reasons.map(r=>`<option ${a.reason===r?'selected':''}>${esc(r)}</option>`).join('')}</select></div>
+        <div class="field"><label>Severity</label><div style="display:flex;gap:8px">${sev}</div></div></div>
+      <div class="field"><label>Coaching note to ${esc(l.rep)}</label><textarea class="input" data-act="note" rows="2" placeholder="One clear line the rep can act on…" style="min-height:auto;resize:none">${esc(a.note||'')}</textarea></div>
+      <div class="field"><label>Corrective action</label><select class="input" data-act="action">${ACTIONS.map(o=>`<option ${a.action===o?'selected':''}>${esc(o)}</option>`).join('')}</select></div></div>`;
+  }
+  const tagcls='tag '+(S.catKey==='mcch_past'||S.catKey==='mcch_future'?'tag-accent-2':'tag-accent');
+  return `<div class="card elev-sm" style="padding:0;overflow:hidden">
+    <div style="padding:22px 26px 18px;display:flex;align-items:flex-start;justify-content:space-between;gap:16px;border-bottom:1px solid var(--color-divider)">
+      <div style="display:flex;align-items:center;gap:14px"><span style="width:52px;height:52px;flex:none;display:grid;place-items:center;border-radius:999px;background:var(--color-accent-200);color:var(--color-accent-800);font-size:17px;font-weight:700">${esc(l.ini)}</span><div style="line-height:1.3"><div style="font-family:var(--font-heading);font-size:23px">${esc(l.name)}</div><div style="font-size:12.5px;color:${MUT(58)}">${esc(l.meta)} · rep ${esc(l.rep)}</div></div></div>
+      <span class="${tagcls}">${esc(cat.name)}</span></div>
+    <div style="padding:22px 26px;display:flex;flex-direction:column;gap:18px">
+      <div style="display:flex;gap:12px;background:var(--color-accent-2-100);border-radius:16px;padding:14px 16px"><span style="width:26px;height:26px;flex:none;display:grid;place-items:center;border-radius:999px;background:var(--color-accent-2);color:var(--color-bg);font-size:13px;font-weight:700">i</span><div style="line-height:1.5"><div style="font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--color-accent-2-800);margin-bottom:3px">Why the system flagged this</div><div style="font-size:13.5px;color:var(--color-accent-2-900)">${esc(l.systemNote)}</div></div></div>
+      <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap"><span style="${tierStyle(p.tier,1)}">${p.tier} · score ${p.score}/100</span><span style="font-size:12px;color:${MUT(55)}">#${rank} of ${dl.length} by priority in this category</span><span style="flex:1;min-width:12px"></span><span style="display:flex;gap:12px">${factors}</span></div>
+      <div><div style="font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:${MUT(52)};margin-bottom:6px">What to check</div><div style="font-size:14px;line-height:1.55;color:${MUT(88)}">${esc(cat.check)}</div></div>
+      <div style="background:var(--color-bg);border-radius:16px;padding:18px 18px 16px;border:1px solid var(--color-divider)"><div style="font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:${MUT(50)};margin-bottom:16px">Lead history</div><div class="ls-scroll" style="display:flex;align-items:flex-start;overflow-x:auto">${tl}</div></div>
+      <div style="display:flex;flex-direction:column;gap:12px"><div style="font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:${MUT(52)}">Your verdict</div><div style="display:flex;gap:12px"><button class="btn" data-act="verdict" data-v="correct" style="${vb(a.verdict==='correct','c')}"><span style="margin-right:7px;font-size:15px">✓</span>Handled correctly</button><button class="btn" data-act="verdict" data-v="deviation" style="${vb(a.verdict==='deviation','d')}"><span style="margin-right:7px;font-size:13px">▲</span>Deviation found</button></div></div>
+      ${dev}
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px"><button class="btn btn-secondary" data-act="prev" style="font-size:13px">← Previous</button><span style="font-size:11.5px;color:${MUT(45)}">${a.verdict?(a.verdict==='correct'?'Logged as correct ✓':'Deviation logged ✓'):'No verdict yet — pick one above'}</span><button class="btn btn-primary" data-act="next">Save &amp; next →</button></div>
+    </div></div>`;
+}
+function adherView(){
+  const total=L().length,done=audited(),pct=total?Math.round(done/total*100):0,miss=total-done;
+  const cor=L().filter(l=>verdictOf(l.id)==='correct').length,dev=L().filter(l=>verdictOf(l.id)==='deviation').length,hi=L().filter(l=>{const x=S.audits[l.id];return x&&x.verdict==='deviation'&&x.sev==='high';}).length;
+  const gaps=CATS.map(c=>{const dl=catLeads(c.key).filter(l=>verdictOf(l.id)),dv=dl.filter(l=>verdictOf(l.id)==='deviation').length,r=dl.length?Math.round(dv/dl.length*100):0;
+    return `<div style="display:flex;flex-direction:column;gap:6px"><div style="display:flex;justify-content:space-between;gap:10px"><span style="display:flex;align-items:center;gap:9px;font-size:13.5px;font-weight:600"><span style="width:10px;height:10px;border-radius:999px;background:${c.dot}"></span>${esc(c.name)}</span><span style="font-size:12.5px;color:${MUT(60)}">${dl.length?(dv+' of '+dl.length+' · '+r+'%'):'not audited'}</span></div><span style="height:8px;border-radius:999px;background:${MUT(9)};overflow:hidden"><span style="display:block;height:100%;width:${r}%;background:${r>=50?'#b2622d':r>=25?'var(--color-accent)':'var(--color-accent-2)'};border-radius:999px"></span></span></div>`;}).join('');
+  const reps=R().map(r=>{const mine=L().filter(l=>l.rep===r.name),sd=mine.filter(l=>verdictOf(l.id)==='deviation').length,mx=Math.max(1,...r.trend),fl=r.trend.reduce((a,b)=>a+b,0);
+    const spark=r.trend.map(v=>`<span style="width:8px;border-radius:3px 3px 0 0;background:color-mix(in srgb,var(--color-accent) 70%,transparent);height:${Math.max(3,Math.round(v/mx*24))}px"></span>`).join('');
+    return `<div style="display:flex;align-items:center;gap:14px"><span style="width:34px;height:34px;flex:none;display:grid;place-items:center;border-radius:999px;background:var(--color-accent-200);color:var(--color-accent-800);font-size:12px;font-weight:700">${esc(r.ini)}</span><div style="flex:1;min-width:0"><div style="display:flex;justify-content:space-between;gap:8px"><span style="font-size:13.5px;font-weight:600">${esc(r.name)}</span><span style="font-size:12px;color:${MUT(55)};font-weight:600">${fl} flagged</span></div><div style="display:flex;align-items:flex-end;gap:4px;height:26px;margin-top:5px">${spark}</div></div><div style="text-align:right;line-height:1.2"><div style="font-family:var(--font-heading);font-size:19px">${sd}</div><div style="font-size:10.5px;color:${MUT(55)}">today</div></div></div>`;}).join('');
+  return `<div class="wrap" style="padding-bottom:44px;animation:lsfade .25s ease">
+    <div style="padding:14px 0 20px"><h2 style="margin:0;font-size:30px">My adherence</h2><div style="font-size:13.5px;color:${MUT(60)}">Friday, 25 Jul 2026 · same-day cutoff at 7:00 PM — anything unaudited by then counts against you</div></div>
+    <div style="display:grid;grid-template-columns:1.1fr 1fr 1fr;gap:18px;padding-bottom:20px">
+      <div class="card elev-sm" style="padding:22px 24px;flex-direction:row;align-items:center;gap:20px"><span style="width:104px;height:104px;flex:none;border-radius:999px;background:conic-gradient(var(--color-accent-2) ${Math.round(pct/100*360)}deg, ${MUT(10)} 0);display:grid;place-items:center"><span style="width:78px;height:78px;border-radius:999px;background:var(--color-surface);display:grid;place-items:center"><span style="font-family:var(--font-heading);font-size:26px">${pct}%</span></span></span><div style="line-height:1.35"><div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:${MUT(55)}">Today's adherence</div><div style="font-family:var(--font-heading);font-size:22px;margin-top:2px">${done} of ${total}</div><div style="font-size:12.5px;color:${MUT(60)}">${miss} still open · 3h 41m to cutoff</div></div></div>
+      <div class="card elev-sm" style="padding:22px 24px;gap:12px"><div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:${MUT(55)}">This session</div><div style="display:flex;gap:12px"><div style="flex:1"><div style="font-family:var(--font-heading);font-size:30px;line-height:1;color:var(--color-accent-2-700)">${cor}</div><div style="font-size:11.5px;color:${MUT(60)};margin-top:4px">handled correctly</div></div><div style="flex:1"><div style="font-family:var(--font-heading);font-size:30px;line-height:1;color:var(--color-accent-700)">${dev}</div><div style="font-size:11.5px;color:${MUT(60)};margin-top:4px">deviations found</div></div><div style="flex:1"><div style="font-family:var(--font-heading);font-size:30px;line-height:1">${hi}</div><div style="font-size:11.5px;color:${MUT(60)};margin-top:4px">high severity</div></div></div></div>
+      <div class="card elev-sm" style="padding:22px 24px;gap:8px"><div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:${MUT(55)}">Data source</div><div style="font-size:13.5px;color:${MUT(75)};line-height:1.5">${S.src==='live'?'Live — /api/queue (Google Sheet)':'Demo data (public/demo) — wire the sheet to go live'}</div></div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px">
+      <div class="card elev-sm" style="padding:22px 24px;gap:16px"><div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:${MUT(55)}">Category gap summary</div>${gaps}</div>
+      <div class="card elev-sm" style="padding:22px 24px;gap:14px"><div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:${MUT(55)}">Per-rep deviation trend</div>${reps}</div>
+    </div></div>`;
+}
+function mgrView(){
+  const done=audited(),dev=L().filter(l=>verdictOf(l.id)==='deviation').length,hi=L().filter(l=>{const x=S.audits[l.id];return x&&x.verdict==='deviation'&&x.sev==='high';}).length;
+  const rows=TLS().map(t=>{const tot=t.total||20,au=t.me?done:(t.simAudited!=null?t.simAudited:tot),dv=t.me?dev:(t.simDev||0),h=t.me?hi:(t.simHigh||0),ad=Math.round(au/tot*100);
+    const cls=ad>=90?'tag tag-accent-2':ad>=70?'tag tag-neutral':'tag tag-outline';
+    return `<tr style="${t.me?'background:color-mix(in srgb,var(--color-accent) 8%,transparent)':''}"><td><span style="display:flex;align-items:center;gap:10px"><span style="width:30px;height:30px;flex:none;display:grid;place-items:center;border-radius:999px;background:${t.me?'var(--color-accent)':'var(--color-accent-200)'};color:${t.me?'var(--color-bg)':'var(--color-accent-800)'};font-size:11px;font-weight:700">${esc(t.ini)}</span><span style="font-weight:600">${esc(t.name)}</span></span></td><td style="color:${MUT(62)}">${esc(t.cluster)}</td><td style="text-align:center">${au}/${tot}</td><td style="text-align:center"><span class="${cls}">${ad}%</span></td><td style="text-align:center">${dv}</td><td style="text-align:center">${h}</td><td style="color:${MUT(75)}">${esc(t.topGap)}</td></tr>`;}).join('');
+  const allT=TLS().map(t=>{const tot=t.total||20,au=t.me?done:(t.simAudited!=null?t.simAudited:tot);return{name:t.name,total:tot,au};});
+  const tAu=allT.reduce((s,t)=>s+t.au,0),tTot=allT.reduce((s,t)=>s+t.total,0)||1;
+  const risk=allT.map(t=>{const open=t.total-t.au,dot=open>6?'#b2622d':open>0?'var(--color-accent)':'var(--color-accent-2)';return `<div style="display:flex;align-items:center;gap:12px"><span style="width:8px;height:8px;border-radius:999px;background:${dot};flex:none"></span><span style="flex:1;font-size:13.5px">${esc(t.name)} — ${open>0?(open+' of '+t.total+' audits open'):('all '+t.total+' audited')}</span><span class="${open>6?'tag tag-outline':open>0?'tag tag-accent':'tag tag-accent-2'}">${open>6?'At risk':open>0?'On track':'Done'}</span></div>`;}).join('');
+  const tcb={mcch_past:44,followup_missed:58,not_interested:39,not_qualified:33,mcch_future:27};
+  const tgaps=CATS.map(c=>{const r=tcb[c.key];return `<div style="display:flex;flex-direction:column;gap:6px"><div style="display:flex;justify-content:space-between;gap:10px"><span style="display:flex;align-items:center;gap:9px;font-size:13.5px;font-weight:600"><span style="width:10px;height:10px;border-radius:999px;background:${c.dot}"></span>${esc(c.name)}</span><span style="font-size:12.5px;color:${MUT(60)}">${r}% deviation</span></div><span style="height:8px;border-radius:999px;background:${MUT(9)};overflow:hidden"><span style="display:block;height:100%;width:${r}%;background:${r>=50?'#b2622d':r>=25?'var(--color-accent)':'var(--color-accent-2)'};border-radius:999px"></span></span></div>`;}).join('');
+  return `<div class="wrap" style="padding-bottom:44px;animation:lsfade .25s ease">
+    <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:20px;flex-wrap:wrap;padding:14px 0 20px"><div><h2 style="margin:0;font-size:30px">Team-lead oversight</h2><div style="font-size:13.5px;color:${MUT(60)}">Friday, 25 Jul 2026 · audit adherence and deviations across all TLs</div></div><div style="display:flex;gap:14px"><div style="text-align:right"><div style="font-family:var(--font-heading);font-size:24px">${Math.round(tAu/tTot*100)}%</div><div style="font-size:11px;color:${MUT(55)}">team adherence</div></div><div style="text-align:right"><div style="font-family:var(--font-heading);font-size:24px">${tTot-tAu}</div><div style="font-size:11px;color:${MUT(55)}">audits missed</div></div></div></div>
+    <div class="card elev-sm" style="padding:6px 22px 14px;margin-bottom:18px"><table class="table"><thead><tr><th>Team lead</th><th>Cluster</th><th style="text-align:center">Audited</th><th style="text-align:center">Adherence</th><th style="text-align:center">Deviations</th><th style="text-align:center">High sev</th><th>Top gap category</th></tr></thead><tbody>${rows}</tbody></table></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px"><div class="card elev-sm" style="padding:22px 24px;gap:16px"><div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:${MUT(55)}">Deviation rate by category · team-wide</div>${tgaps}</div><div class="card elev-sm" style="padding:22px 24px;gap:14px"><div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:${MUT(55)}">Adherence risk · cutoff 7:00 PM</div>${risk}</div></div></div>`;
+}
+
+// ---- events ----
+function patch(id,o){S.audits[id]=Object.assign({verdict:null,reason:'',sev:'',note:'',action:'No action needed'},S.audits[id],o);}
+document.addEventListener('click',e=>{
+  const t=e.target.closest('[data-act]');if(!t)return;const act=t.dataset.act,v=t.dataset.v;
+  if(act==='nav'){S.screen=v;render();}
+  else if(act==='rules'){S.showRules=!S.showRules;render();}
+  else if(act==='cat'){S.catKey=v;S.selId=(catLeads(v)[0]||{}).id;render();}
+  else if(act==='lead'){S.selId=v;render();}
+  else if(act==='verdict'){const a=S.audits[S.selId]||{};if(v==='deviation')patch(S.selId,{verdict:'deviation',reason:a.reason||catObj(S.catKey).reasons[0],sev:a.sev||'med'});else patch(S.selId,{verdict:'correct'});render();}
+  else if(act==='sev'){patch(S.selId,{sev:v});render();}
+  else if(act==='prev'){const dl=catLeads(S.catKey),i=dl.findIndex(x=>x.id===S.selId);S.selId=dl[(i-1+dl.length)%dl.length].id;render();}
+  else if(act==='next'){const dl=catLeads(S.catKey),i=dl.findIndex(x=>x.id===S.selId);for(let k=1;k<=dl.length;k++){const j=(i+k)%dl.length;if(!(S.audits[dl[j].id]&&S.audits[dl[j].id].verdict)){S.selId=dl[j].id;render();return;}}S.selId=dl[(i+1)%dl.length].id;render();}
+});
+document.addEventListener('change',e=>{const t=e.target.closest('[data-act]');if(!t)return;if(t.dataset.act==='reason')patch(S.selId,{reason:t.value});else if(t.dataset.act==='action')patch(S.selId,{action:t.value});});
+document.addEventListener('input',e=>{const t=e.target.closest('[data-act]');if(t&&t.dataset.act==='note'){S.audits[S.selId]=Object.assign({},S.audits[S.selId],{note:t.value});}});
+
+load();
+</script>
+</body>
+</html>
