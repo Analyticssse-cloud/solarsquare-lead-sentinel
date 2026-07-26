@@ -12,6 +12,14 @@
 const { readSheet, toObjects } = require('./_sheets');
 const { fetchCardJson } = require('./_metabase');
 
+// raise the serverless limit above Metabase's cold round-trip (needs Vercel Pro;
+// harmless on Hobby, which caps at 10s regardless)
+module.exports.config = { maxDuration: 30 };
+
+// warm-cache the whole pull so repeat loads are instant and never re-hit Metabase
+let CACHE = null, CACHE_AT = 0;
+const CACHE_TTL = 5 * 60 * 1000;
+
 const QUEUE_TAB = process.env.QUEUE_TAB || 'Audit_Queue';
 const MAP_TAB   = process.env.MAP_TAB   || 'LRM_TL_MAP';
 
@@ -27,6 +35,12 @@ module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
   if (req.method === 'OPTIONS') return res.status(200).end();
+
+  // serve warm cache if fresh
+  if (CACHE && Date.now() - CACHE_AT < CACHE_TTL) {
+    res.setHeader('Cache-Control', 's-maxage=300, stale-while-revalidate=600');
+    return res.status(200).json({ ...CACHE, cached: true });
+  }
 
   try {
     // ---- audit rows: Metabase Q4447 first, Sheets tab as fallback ----
@@ -81,8 +95,10 @@ module.exports = async (req, res) => {
     })).filter(h => h.rep_email && h.hr_status.toLowerCase() !== 'inactive');
 
     const auditDate = (queue[0] && queue[0].audit_date) || new Date().toISOString().slice(0, 10);
+    CACHE = { auditDate, source, queue, hierarchy };
+    CACHE_AT = Date.now();
     res.setHeader('Cache-Control', 's-maxage=300, stale-while-revalidate=600');
-    return res.status(200).json({ auditDate, source, queue, hierarchy });
+    return res.status(200).json(CACHE);
   } catch (err) {
     console.error('queue API error:', err);
     return res.status(500).json({ error: String(err.message || err) });
