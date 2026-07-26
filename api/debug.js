@@ -13,7 +13,7 @@ module.exports = async (req, res) => {
   const out = {
     env: {
       SHEET_ID:          !!process.env.SHEET_ID,
-      GOOGLE_SA_EMAIL:   process.env.GOOGLE_SA_EMAIL || null,
+      GOOGLE_SA_EMAIL:   process.env.GOOGLE_SA_EMAIL || null,   // email is safe to show
       GOOGLE_SA_KEY:     !!process.env.GOOGLE_SA_KEY,
       METABASE_URL:      process.env.METABASE_URL || null,
       METABASE_USER:     !!process.env.METABASE_USER,
@@ -38,6 +38,7 @@ module.exports = async (req, res) => {
     }
   }
 
+  // Metabase reachability (login only, no query)
   try {
     const base = (process.env.METABASE_URL || '').replace(/\/+$/, '');
     if (base && process.env.METABASE_USER) {
