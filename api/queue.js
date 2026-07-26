@@ -80,6 +80,19 @@ module.exports = async (req, res) => {
       category_rank:         num(r.category_rank),
     })).filter(r => r.lead_id && r.category);
 
+    // ---- trim: keep only the top N most-overdue per (rep, category) ----
+    // the app samples 4/category/TL, so 12 gives ample headroom while capping payload
+    const PER = Number(process.env.PER_REP_CATEGORY || 12);
+    const seen = {};
+    const trimmed = queue
+      .slice()
+      .sort((a, b) => b.days_overdue - a.days_overdue)
+      .filter(r => {
+        const k = r.rep_email + '|' + r.category;
+        seen[k] = (seen[k] || 0) + 1;
+        return seen[k] <= PER;
+      });
+
     // ---- hierarchy: LRM_TL_MAP sheet ----
     const mRaw = await readSheet(MAP_TAB).catch(() => []);
     const hierarchy = toObjects(mRaw).map(r => ({
@@ -90,12 +103,14 @@ module.exports = async (req, res) => {
       tl_email:   norm(pick(r, ['LRM TL Email ID', 'LRM TL', 'TL Email', 'tl_email'])),
       tl_name:    pick(r, ['Reporting Team Lead', 'TL Name', 'tl_name']),
       zsm_email:  norm(pick(r, ['LRM DZSM Email ID', 'DZSM', 'ZSM Email', 'zsm_email'])),
-      ados_email: norm(pick(r, ['ADOS', 'ADOS Email', 'ados_email'])),
+      zsm_name:   pick(r, ['ZSM Name', 'zsm_name']),
+      ados_email: norm(pick(r, ['ADOS Email', 'ADOS', 'ados_email'])),
+      ados_name:  pick(r, ['ADOS Name', 'ados_name']),
       hr_status:  pick(r, ['HR Status', 'Status', 'hr_status']) || 'Active',
     })).filter(h => h.rep_email && h.hr_status.toLowerCase() !== 'inactive');
 
-    const auditDate = (queue[0] && queue[0].audit_date) || new Date().toISOString().slice(0, 10);
-    CACHE = { auditDate, source, queue, hierarchy };
+    const auditDate = (trimmed[0] && trimmed[0].audit_date) || new Date().toISOString().slice(0, 10);
+    CACHE = { auditDate, source, queue: trimmed, hierarchy };
     CACHE_AT = Date.now();
     res.setHeader('Cache-Control', 's-maxage=300, stale-while-revalidate=600');
     return res.status(200).json(CACHE);
