@@ -2,44 +2,44 @@
 @import url('https://fonts.googleapis.com/css2?family=Caprasimo:wght@400&family=Figtree:wght@400;600;700&display=swap');
 
 :root {
-  --color-bg: #f5ead8;
-  --color-surface: #ebddc5;
-  --color-text: #201e1d;
-  --color-accent: #c67139;
-  --color-accent-2: #7a8a5e;
-  --color-divider: color-mix(in srgb, #201e1d 16%, transparent);
+  --color-bg: #f4f6f9;
+  --color-surface: #e8eef5;
+  --color-text: #142238;
+  --color-accent: #2379c6;
+  --color-accent-2: #eda012;
+  --color-divider: color-mix(in srgb, #142238 15%, transparent);
 
-  /* Tonal ramps — generated in OKLCH on one shared lightness scale, so the
-     same step of any role matches the others in visual value. */
-  --color-neutral-100: #f9f4ed;
-  --color-neutral-200: #eee7db;
-  --color-neutral-300: #dcd3c4;
-  --color-neutral-400: #c0b6a5;
-  --color-neutral-500: #a19786;
-  --color-neutral-600: #82796a;
-  --color-neutral-700: #645c50;
-  --color-neutral-800: #474238;
-  --color-neutral-900: #2e2b25;
+  /* Tonal ramps — SolarSquare brand: process blue primary, solar-gold second,
+     on a cool neutral ground drawn from the logo. */
+  --color-neutral-100: #f4f6f9;
+  --color-neutral-200: #e6eaf1;
+  --color-neutral-300: #cfd6e1;
+  --color-neutral-400: #adb8c8;
+  --color-neutral-500: #8894a7;
+  --color-neutral-600: #687488;
+  --color-neutral-700: #4d5869;
+  --color-neutral-800: #353f4d;
+  --color-neutral-900: #202836;
 
-  --color-accent-100: #fff2eb;
-  --color-accent-200: #ffe1d0;
-  --color-accent-300: #ffc6a5;
-  --color-accent-400: #f6a06b;
-  --color-accent-500: #d67f48;
-  --color-accent-600: #b2622d;
-  --color-accent-700: #8c491a;
-  --color-accent-800: #643312;
-  --color-accent-900: #402310;
+  --color-accent-100: #e8f1fb;
+  --color-accent-200: #c8ddf4;
+  --color-accent-300: #9dc3ea;
+  --color-accent-400: #5f9bd8;
+  --color-accent-500: #2379c6;
+  --color-accent-600: #1668b3;
+  --color-accent-700: #114f89;
+  --color-accent-800: #0d3c66;
+  --color-accent-900: #0a2b49;
 
-  --color-accent-2-100: #f0fae1;
-  --color-accent-2-200: #e1eecc;
-  --color-accent-2-300: #ccdbb2;
-  --color-accent-2-400: #aebf92;
-  --color-accent-2-500: #8fa073;
-  --color-accent-2-600: #728157;
-  --color-accent-2-700: #56633f;
-  --color-accent-2-800: #3d472b;
-  --color-accent-2-900: #272e1b;
+  --color-accent-2-100: #fdf2d9;
+  --color-accent-2-200: #f9e0a6;
+  --color-accent-2-300: #f5c968;
+  --color-accent-2-400: #f1b234;
+  --color-accent-2-500: #eda012;
+  --color-accent-2-600: #cf8410;
+  --color-accent-2-700: #9f6410;
+  --color-accent-2-800: #744910;
+  --color-accent-2-900: #4d310c;
 
   --font-heading: "Caprasimo", system-ui, sans-serif;
   --font-heading-weight: 400;
