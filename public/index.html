@@ -52,18 +52,84 @@ const ini2=n=>{const p=String(n||'').trim().split(/\s+/);return((p[0]&&p[0][0]||
 const fmtD=iso=>{if(!iso)return'';const d=new Date(iso);return isNaN(d)?'':d.getDate()+' '+MON[d.getMonth()];};
 const catObj=k=>CATS.find(c=>c.key===k);
 
-const S={screen:'queue',tlEmail:null,catKey:'mcch_past',selId:null,audits:{},showRules:false,model:null,src:'demo'};
+const S={screen:'queue',tlEmail:null,catKey:'mcch_past',selId:null,audits:{},showRules:false,model:null,src:'demo',role:'demo',user:null,meEmail:null};
 
-function fetchT(url,ms){const c=new AbortController();const t=setTimeout(()=>c.abort(),ms||3500);return fetch(url,{signal:c.signal}).finally(()=>clearTimeout(t));}
+const AUTH={enabled:true,ready:false,clientId:'',domain:'solarsquare.in',admins:[]};
+const ROLE_LABEL={tl:'Team Lead',zsm:'Zonal Manager',ados:'ADOS',admin:'Admin',demo:'Team Lead',none:'No team mapped'};
+function readSession(){try{return JSON.parse(localStorage.getItem('ls_auth')||'null');}catch(e){return null;}}
+function saveSession(o){try{localStorage.setItem('ls_auth',JSON.stringify(o));}catch(e){}}
+function signOut(){try{if(window.google&&google.accounts&&google.accounts.id)google.accounts.id.disableAutoSelect();}catch(e){}localStorage.removeItem('ls_auth');location.reload();}
+function decodeJwt(t){try{const b=t.split('.')[1].replace(/-/g,'+').replace(/_/g,'/');return JSON.parse(decodeURIComponent(escape(atob(b))));}catch(e){return{};}}
+function authHeaders(){const a=readSession();return a&&a.token?{Authorization:'Bearer '+a.token}:{};}
+let gisReady=null;
+function loadGis(){if(gisReady)return gisReady;gisReady=new Promise(res=>{if(window.google&&google.accounts)return res(true);const s=document.createElement('script');s.src='https://accounts.google.com/gsi/client';s.async=1;s.defer=1;s.onload=()=>res(true);s.onerror=()=>res(false);document.head.appendChild(s);});return gisReady;}
+function handleCredential(resp){const c=decodeJwt(resp.credential);const em=(c.email||'').toLowerCase();if(AUTH.domain&&c.hd!==AUTH.domain&&!em.endsWith('@'+AUTH.domain)){alert('Please sign in with your @'+AUTH.domain+' account.');return;}saveSession({name:c.name||'',email:c.email||'',picture:c.picture||'',token:resp.credential});location.reload();}
+async function renderGoogleBtn(el){const ok=await loadGis();if(!ok||!el||!window.google)return;google.accounts.id.initialize({client_id:AUTH.clientId,callback:handleCredential,hd:AUTH.domain});el.innerHTML='';google.accounts.id.renderButton(el,{theme:'outline',size:'large',shape:'pill',text:'signin_with',width:288});google.accounts.id.prompt();}
+async function initAuth(){
+  try{const r=await fetch('/api/config',{cache:'no-store'});if(r.ok){const c=await r.json();AUTH.enabled=!!c.enabled;AUTH.clientId=c.clientId||'';AUTH.domain=(c.allowedDomain||AUTH.domain||'').toLowerCase();AUTH.admins=c.admins||[];}else{AUTH.enabled=false;}}
+  catch(e){AUTH.enabled=false;}
+  AUTH.ready=true;
+}
+function loginView(denied){
+  const em=denied&&readSession()?esc(readSession().email):'';
+  document.getElementById('app').innerHTML=`<div class="wrap" style="min-height:100vh;display:grid;place-items:center">
+    <div style="max-width:400px;text-align:center;display:flex;flex-direction:column;align-items:center;gap:20px;padding:40px 0">
+      <img src="solarsquare-logo.png" alt="SolarSquare" style="height:34px">
+      <div style="display:flex;align-items:center;gap:11px;font-family:var(--font-heading);font-size:24px"><span style="width:32px;height:32px;border-radius:999px;background:var(--color-accent);display:grid;place-items:center"><span style="width:13px;height:13px;border-radius:999px;border:3px solid var(--color-bg)"></span></span>Lead Sentinel</div>
+      <div style="font-size:14px;line-height:1.6;color:${MUT(62)}">${denied?`<b>${em}</b> isn't authorised for Lead Sentinel.<br>Sign in with a mapped TL / manager account, or ask an admin for access.`:'Conversion-desk audit tool. Sign in with your SolarSquare account to continue.'}</div>
+      <div id="gbtn" style="min-height:44px;display:grid;place-items:center"></div>
+      ${denied?`<button class="btn btn-secondary" onclick="signOut()" style="font-size:12.5px">Use a different account</button>`:''}
+      <div style="font-size:11.5px;color:${MUT(45)}">Access is restricted to @${esc(AUTH.domain)} accounts.</div>
+    </div></div>`;
+  renderGoogleBtn(document.getElementById('gbtn'));
+}
+
+function genDemo(){
+  const T=[
+    {tl:'amit.jaiswar@solarsquare.in',tn:'Amit Jaiswar',z:'nidhi.m@solarsquare.in',a:'noor.alam@solarsquare.in',cl:'Pune',reps:[['Sakshi Jadhav','sakshi.jadhav'],['Tejal Pakhale','tejal.p'],['Akshada Tribhuwan','akshada.t'],['Manasi Jagtap','manasi.jagtap'],['Gaurav Nagpure','gaurav.nagpure'],['Poonam Yadav','poonam.yadav']],ar:['Wakad','Baner','Kothrud','Bavdhan','Aundh','Hinjewadi']},
+    {tl:'unnati.dahikar@solarsquare.in',tn:'Unnati Dahikar',z:'anurag.jaiswal@solarsquare.in',a:'anurag.mishra@solarsquare.in',cl:'Indore',reps:[['Khushi Piplewar','khushi.piplewar'],['Kalpesh Chachare','kalpesh.chachare'],['Uday Jain','uday.jain'],['Jayesh Chouhan','jayesh.chouhan']],ar:['Vijay Nagar','Palasia','Rau','Rajwada']},
+    {tl:'prabhat.samal@solarsquare.in',tn:'Prabhat Samal',z:'meenu.k@solarsquare.in',a:'deepanshi.s@solarsquare.in',cl:'Lucknow',reps:[['Vrunda Jagtap','vrunda.jagtap'],['Megha Rai','megha.rai'],['Saloni Singh','saloni.singh'],['Ashutosh Mittal','ashutosh.mittal']],ar:['Gomti Nagar','Aliganj','Indira Nagar','Alambagh']},
+  ];
+  const cats=['mcch_past','followup_missed','not_interested','not_qualified','mcch_future'];
+  const fn=['Meera','Vikram','Karan','Deepa','Anita','Sneha','Rohan','Farah','Priya','Sameer','Nikhil','Ritu','Rohit','Alok','Tanvi','Imran','Ananya','Manish','Pooja','Arjun'];
+  const ln=['Joshi','Rao','Shetty','Nair','Patil','Jain','Verma','Mehta','Bose','Reddy','Das','Singh','Shah','Naik','Bhat'];
+  const iso=da=>{const d=new Date('2026-07-25T00:00:00+05:30');d.setDate(d.getDate()-da);return d.toISOString();};
+  const isoF=da=>{const d=new Date('2026-07-25T00:00:00+05:30');d.setDate(d.getDate()+da);return d.toISOString();};
+  let seq=50200;const queue=[],hierarchy=[];
+  T.forEach(t=>{t.reps.forEach(r=>hierarchy.push({rep_email:r[1]+'@solarsquare.in',rep_name:r[0],cluster:t.cl,tl_email:t.tl,tl_name:t.tn,zsm_email:t.z,ados_email:t.a,hr_status:'Active'}));
+    let li=0;cats.forEach(cat=>{for(let k=0;k<4;k++){const rp=t.reps[li%t.reps.length];li++;const area=t.ar[(li+k)%t.ar.length];
+      const row={audit_date:'2026-07-25',rep_name:rp[0],rep_email:rp[1]+'@solarsquare.in',lead_id:'RMH'+(seq++),customer_name:fn[(seq+k)%fn.length]+' '+ln[(seq*2+k)%ln.length],cluster:area,lead_stage:'',category:cat,created_at:iso(14+((li+k)%10)),meeting_confirmed_at:null,meeting_schedule_date:null,meeting_done_date:null,follow_up_at:null,qualified_at:null,status_changed_at:null,attempt_today:false,days_overdue:0};
+      if(cat==='mcch_past'){const od=1+((k+li)%5);row.meeting_confirmed_at=iso(od+4);row.meeting_schedule_date=iso(od);row.days_overdue=od;}
+      else if(cat==='mcch_future'){row.meeting_confirmed_at=iso(1);row.meeting_schedule_date=isoF(1+((k+li)%4));}
+      else if(cat==='followup_missed'){const od=(k+li)%5;row.follow_up_at=iso(od);row.days_overdue=od;}
+      else if(cat==='not_interested'){const od=1+((k+li)%8);if(k!==1)row.meeting_confirmed_at=iso(od+3);row.status_changed_at=iso(od);row.days_overdue=od;}
+      else if(cat==='not_qualified'){const od=1+((k+li)%7);if(k===1)row.qualified_at=iso(od+2);row.status_changed_at=iso(od);row.days_overdue=od;}
+      queue.push(row);}});});
+  return{queue,hierarchy};
+}
+function fetchT(url,ms,headers){const c=new AbortController();const t=setTimeout(()=>c.abort(),ms||3500);return fetch(url,{signal:c.signal,headers:headers||{}}).finally(()=>clearTimeout(t));}
 async function load(){
+  await initAuth();
+  const sess=readSession();
+  if(AUTH.enabled&&!sess){return loginView(false);}
   document.getElementById('app').innerHTML='<div class="wrap" style="padding-top:80px;text-align:center;color:'+MUT(55)+';font-size:14px">Loading Lead Sentinel…</div>';
   let data=null;
-  try{const r=await fetchT('/api/queue',20000);if(r.ok){const j=await r.json();if(j&&j.queue&&j.queue.length){data=j;S.src='live';}}}catch(e){}
+  try{const r=await fetchT('/api/queue',20000,authHeaders());
+    if(r.status===401||r.status===403){return loginView(true);}
+    if(r.ok){const j=await r.json();
+      if(AUTH.enabled){data=j;S.src='live';}                 // gated → server response is authoritative
+      else if(j&&j.queue&&j.queue.length){data=j;S.src='live';}
+    }
+  }catch(e){}
   if(!data){
     try{const [q,h]=await Promise.all([fetchT('demo/audit_queue_daily.json').then(r=>r.json()),fetchT('demo/lrm_hierarchy.json').then(r=>r.json())]);data={queue:q,hierarchy:h};S.src='demo';}
-    catch(e){document.getElementById('app').innerHTML='<div class="wrap" style="padding-top:80px;color:#b2622d">Could not load data: '+esc(e.message)+'</div>';return;}
+    catch(e){data=genDemo();S.src='demo';}
   }
+  S.role=data.role||(S.src==='demo'?'demo':'tl');
+  S.user=data.user||sess||null;
+  S.meEmail=data.meEmail||null;
   buildModel(data.queue,data.hierarchy);
+  if(S.role==='zsm'||S.role==='ados'||S.role==='admin')S.screen='mgr';
   render();
 }
 
@@ -89,9 +155,11 @@ function buildModel(queue,hier){
     const mx=Math.max(1,...reps.map(r=>r.flagged));const rr={};reps.forEach(r=>rr[r.name]=Math.min(100,Math.round(r.flagged/mx*100)));
     repsByTl[tl]=reps;repRiskByTl[tl]=rr;
   });
-  const curTl=Object.keys(leadsByTl).sort((a,b)=>leadsByTl[b].length-leadsByTl[a].length)[0];
+  const busiest=Object.keys(leadsByTl).sort((a,b)=>leadsByTl[b].length-leadsByTl[a].length)[0];
+  const meTl=(S.meEmail&&leadsByTl[S.meEmail])?S.meEmail:null;
+  const curTl=meTl||busiest;
   const tls=Object.keys(leadsByTl).map((tl,i)=>{const ls=leadsByTl[tl],m=tlMeta[tl],od=ls.filter(l=>l.days>2).length;
-    return{email:tl,name:m.name,ini:m.ini,cluster:m.cluster,total:ls.length,me:tl===curTl,
+    return{email:tl,name:m.name,ini:m.ini,cluster:m.cluster,total:ls.length,me:tl===meTl,
       simAudited:tl===curTl?null:Math.max(0,ls.length-(i%3)),simDev:tl===curTl?null:od,simHigh:tl===curTl?null:Math.round(od/2),topGap:topCat(ls)};});
   S.model={leadsByTl,repsByTl,repRiskByTl,tls,curTl};S.tlEmail=curTl;
   const first=(leadsByTl[curTl].filter(l=>l.cat==='mcch_past').sort((a,b)=>b.urg-a.urg)[0]||leadsByTl[curTl][0]||{});
@@ -134,15 +202,22 @@ function render(){
   el.innerHTML=nav()+(S.screen==='queue'?queueView():S.screen==='adher'?adherView():mgrView());
 }
 function nav(){
-  const me=TLS().find(t=>t.me)||{name:'—',ini:'—',cluster:'—'};
+  const meTl=TLS().find(t=>t.me);
+  const uName=(S.user&&(S.user.name||S.user.email))||(meTl&&meTl.name)||'—';
+  const uPic=S.user&&S.user.picture;
+  const roleLbl=ROLE_LABEL[S.role]||'Team Lead';
+  const sub=roleLbl+(meTl&&meTl.cluster?' · '+meTl.cluster:'')+(S.src==='demo'?' · demo':'');
+  const uIni=ini2(uName);
   const seg=(id,lbl)=>`<label class="seg-opt" style="${S.screen===id?'background:var(--color-accent);color:var(--color-bg)':''}"><input type="radio" style="position:absolute;opacity:0" ${S.screen===id?'checked':''} data-act="nav" data-v="${id}">${lbl}</label>`;
-  return `<nav class="wrap" style="display:flex;align-items:center;gap:20px;padding-top:18px;padding-bottom:10px">
+  return `<nav class="wrap" style="display:flex;align-items:center;gap:18px;padding-top:18px;padding-bottom:10px">
     <span class="nav-brand" style="display:flex;align-items:center;gap:11px;margin-right:0">
-      <span style="width:30px;height:30px;border-radius:999px;background:var(--color-accent);display:grid;place-items:center"><span style="width:12px;height:12px;border-radius:999px;border:2.75px solid var(--color-bg)"></span></span>Lead Sentinel</span>
-    <div class="seg" style="margin-left:10px">${seg('queue','Audit queue')}${seg('adher','My adherence')}${seg('mgr','Manager view')}</div>
+      <img src="solarsquare-logo.png" alt="SolarSquare" style="height:22px;opacity:.92">
+      <span style="width:1px;height:20px;background:var(--color-divider)"></span>
+      <span style="width:28px;height:28px;border-radius:999px;background:var(--color-accent);display:grid;place-items:center"><span style="width:11px;height:11px;border-radius:999px;border:2.6px solid var(--color-bg)"></span></span>Lead Sentinel</span>
+    <div class="seg" style="margin-left:6px">${seg('queue','Audit queue')}${seg('adher','My adherence')}${seg('mgr','Manager view')}</div>
     <span style="flex:1"></span>
     <span style="display:flex;align-items:center;gap:8px;padding:6px 14px;border-radius:999px;background:var(--color-surface);border:1px solid var(--color-divider)"><span style="width:8px;height:8px;border-radius:999px;background:var(--color-accent)"></span><span style="font-size:12.5px;font-weight:600;color:var(--color-accent-800)">Cutoff 7:00 PM · 3h 41m left</span></span>
-    <span style="display:flex;align-items:center;gap:10px"><span style="display:flex;flex-direction:column;text-align:right;line-height:1.25"><span style="font-size:13px;font-weight:600">${esc(me.name)}</span><span style="font-size:11px;color:${MUT(55)}">Team Lead · ${esc(me.cluster)}${S.src==='demo'?' · demo':''}</span></span><span style="width:38px;height:38px;display:grid;place-items:center;border-radius:999px;background:var(--color-accent-200);color:var(--color-accent-800);font-weight:700;font-size:13px">${esc(me.ini)}</span></span>
+    <span style="display:flex;align-items:center;gap:10px"><span style="display:flex;flex-direction:column;text-align:right;line-height:1.25"><span style="font-size:13px;font-weight:600">${esc(uName)}</span><span style="font-size:11px;color:${MUT(55)}">${esc(sub)}</span></span>${uPic?`<img src="${esc(uPic)}" alt="" style="width:38px;height:38px;border-radius:999px;object-fit:cover">`:`<span style="width:38px;height:38px;display:grid;place-items:center;border-radius:999px;background:var(--color-accent-200);color:var(--color-accent-800);font-weight:700;font-size:13px">${esc(uIni)}</span>`}${AUTH.enabled?`<button class="btn btn-ghost" data-act="signout" title="Sign out" style="padding:8px 10px;font-size:12px">Sign out</button>`:''}</span>
   </nav>`;
 }
 function queueView(){
@@ -241,6 +316,7 @@ function patch(id,o){S.audits[id]=Object.assign({verdict:null,reason:'',sev:'',n
 document.addEventListener('click',e=>{
   const t=e.target.closest('[data-act]');if(!t)return;const act=t.dataset.act,v=t.dataset.v;
   if(act==='nav'){S.screen=v;render();}
+  else if(act==='signout'){signOut();}
   else if(act==='rules'){S.showRules=!S.showRules;render();}
   else if(act==='cat'){S.catKey=v;S.selId=(catLeads(v)[0]||{}).id;render();}
   else if(act==='lead'){S.selId=v;render();}
