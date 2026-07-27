@@ -47,6 +47,81 @@ const RULES=[
  ['4','Daily pick','Top 4 per category, rep-balanced and seeded to the date so the pull is reproducible.'],
 ];
 const MTD={audited:387,total:420,range:'Jul 1–25'};
+// 5-Why decision trees. WHYS[cat](lead) returns the opening node; every option either
+// branches to a follow-up node (`to`) or terminates at a root cause (`root`).
+const WHYS={
+  mcch_past:l=>{const d=l.days||0;return{
+    q:'This meeting was due '+(d?d+' day'+(d===1?'':'s')+' ago':'earlier')+' and the lead is still at MCCH. Why has it not moved to MD?',
+    a:[
+      {t:'The meeting never took place',to:{q:'Why did the confirmed meeting not happen?',a:[
+        {t:'Customer no-showed',to:{q:'Why has it not been rescheduled since the no-show?',a:[
+          {t:'Rep made no attempt to reconnect',to:{q:'Why did the rep not attempt a reschedule?',a:[
+            {t:'Lead deprioritised vs newer leads',root:'Reschedule deprioritised — rep prioritisation gap'},
+            {t:'No task/reminder surfaced it',root:'No system reminder to reschedule after no-show'}]}},
+          {t:'Customer stopped responding',root:'Customer unresponsive after no-show — no win-back cadence'}]}},
+        {t:'Rep missed / double-booked the slot',root:'Rep missed the confirmed meeting slot'},
+        {t:'It was never a genuine confirmation',root:'MCCH marked without real customer confirmation'}]}},
+      {t:'The meeting happened but stage was not updated',to:{q:'Why was the stage not moved to MD after the meeting?',a:[
+        {t:'Rep forgot / deprioritised the update',to:{q:'Why was the stage update missed?',a:[
+          {t:'No end-of-meeting update habit',root:'Meeting done, stage not updated — process discipline'},
+          {t:'Unsure which stage applied',root:'Outcome logged incorrectly — stage-knowledge gap'}]}},
+        {t:'Outcome unclear, rep is waiting',root:'Ambiguous outcome — lead parked at MCCH'}]}},
+      {t:'Customer postponed the meeting',to:{q:'Why was a fresh meeting date not captured?',a:[
+        {t:'No new date taken at postponement',root:'Postponed with no fresh MCCH date set'},
+        {t:'Customer went cold after postponing',root:'Postponed then unresponsive — no follow-up cadence'}]}}]};},
+  followup_missed:l=>{const d=l.days||0;return{
+    q:d>0?('The follow-up is '+d+' day'+(d===1?'':'s')+' overdue with no attempt logged. Why was it not made?'):'The follow-up is due today and no attempt is logged yet. Why has the rep not connected?',
+    a:[
+      {t:'Rep made no attempt to contact',to:{q:'Why was no attempt made?',a:[
+        {t:'Lead slipped out of the day plan',to:{q:'Why did it slip out of the plan?',a:[
+          {t:'No task/reminder surfaced it',root:'No reminder surfaced the due follow-up'},
+          {t:'Too many leads, ran out of time',root:'Rep capacity exceeded — follow-up not reached'}]}},
+        {t:'Rep chose to prioritise other leads',root:'Follow-up deprioritised vs other leads'}]}},
+      {t:'Rep tried but could not reach the customer',to:{q:'Why was the attempt not logged or a new date not set?',a:[
+        {t:'Attempt made but not logged in CRM',root:'Contact attempted but not logged (data gap)'},
+        {t:'Reached, but no new follow-up date set',root:'No fresh follow-up date set after contact'}]}},
+      {t:'The follow-up date was stale / wrong',to:{q:'Why was the follow-up date not honoured?',a:[
+        {t:'Date set by default, no real commitment',root:'Follow-up date set without real commitment'},
+        {t:'Reassigned rep never picked it up',root:'Reassigned lead not actioned by new rep'}]}}]};},
+  not_interested:l=>({
+    q:l.sit==='met'?'This lead was marked Not Interested after a meeting was confirmed. Why was it closed as NI?':'This lead was marked Not Interested before any meeting (MD). Why was it closed this early?',
+    a:[
+      {t:'The real objection was not handled',to:{q:'Why was the objection not handled?',a:[
+        {t:'Objection was not captured / logged',to:{q:'Why was the objection not captured?',a:[
+          {t:'Rep did not probe the reason',root:'Objection not probed — discovery gap'},
+          {t:'Captured verbally, never logged',root:'Objection handled but not logged (data gap)'}]}},
+        {t:'Rep had no rebuttal / offer',root:'Objection known but no rebuttal attempted'}]}},
+      {t:'Closed too early — before a real pitch',to:{q:'Why was it closed before MD?',a:[
+        {t:'Rep judged low intent quickly',root:'Premature close — intent misjudged, no MD'},
+        {t:'Pressure to clear the pipeline',root:'Pipeline-hygiene pressure — closed prematurely'}]}},
+      {t:'Genuinely not interested, but no win-back',to:{q:'Why was there no win-back attempt?',a:[
+        {t:'No win-back cadence exists',root:'Valid NI but no win-back attempt'},
+        {t:'Marked lost and dropped immediately',root:'Closed and dropped — no nurture path'}]}}]}),
+  not_qualified:l=>({
+    q:l.sit==='disc'?'This lead was marked Not Qualified after a discovery call. Why does it not qualify?':'This lead was marked Not Qualified with no discovery call logged. Why was it disqualified without discovery?',
+    a:[
+      {t:'No discovery call actually happened',to:{q:'Why was there no discovery call?',a:[
+        {t:'Rep disqualified on assumption',root:'Disqualified on assumption — no discovery call'},
+        {t:'Could not reach customer to qualify',to:{q:'Why was reaching the customer not retried?',a:[
+          {t:'No retry cadence attempted',root:'Unreachable for discovery — no retry cadence'},
+          {t:'Wrong / bad contact details',root:'Bad contact data — could not qualify'}]}}]}},
+      {t:'The DQ criteria do not really apply',to:{q:'Why were the criteria mis-applied?',a:[
+        {t:'Criteria misunderstood by rep',root:'DQ criteria misunderstood — training gap'},
+        {t:'Reason code missing / wrong',root:'DQ reason code missing or incorrect'}]}},
+      {t:'It qualifies but was closed anyway',root:'Reopen candidate — lead actually qualifies'}]}),
+  mcch_future:l=>({
+    q:'A meeting is confirmed for an upcoming date but the entry is flagged. Why is this MCCH not clean?',
+    a:[
+      {t:'Customer confirmation is not logged',to:{q:'Why is the confirmation missing?',a:[
+        {t:'Rep set MCCH without customer OK',root:'MCCH set without customer confirmation'},
+        {t:'Confirmed verbally, not recorded',root:'Customer confirmed but not logged (data gap)'}]}},
+      {t:'The slot is beyond the D+2 window',to:{q:'Why was the slot booked so far out?',a:[
+        {t:'Customer only available later',root:'Slot beyond D+2 — customer availability'},
+        {t:'Rep pushed the slot to manage load',root:'Slot beyond D+2 — rep scheduling to ease load'}]}},
+      {t:'Prep note was not sent',to:{q:'Why was prep not done?',a:[
+        {t:'No prep step in the rep routine',root:'No meeting-prep note sent to customer'},
+        {t:'Held / duplicate slot',root:'Held or duplicate slot — needs cleanup'}]}}]}),
+};
 // pre-submitted RCAs awaiting the auditor's review (cross-team, illustrative)
 const RCA_SEEDS=[
  {id:'s1',lead:'Rohan Gupta',rep:'Tejal Pakhale',tl:'Amit Jaiswar',cat:'followup_missed',rca:'No new follow-up date set',action:'Ask rep to call today',sev:'high',when:'25 min ago'},
@@ -179,10 +254,13 @@ function buildModel(queue,hier){
     const lead={id:row.lead_id,cat:row.category,name:row.customer_name,loc:row.cluster,
       meta:(row.cluster||'')+' · '+row.lead_id,rep:row.rep_name,ini:ini2(row.customer_name),repIni:ini2(row.rep_name),
       urg:urg,days:row.days_overdue||0,tlEmail:tl,tlName:h.tl_name||'Unassigned',
-      timeline:buildTL(row),systemNote:buildNote(row)};
+      timeline:buildTL(row),systemNote:buildNote(row),
+      sit:row.category==='not_interested'?(row.meeting_confirmed_at?'met':'early'):row.category==='not_qualified'?(row.qualified_at?'disc':'nodisc'):row.category==='followup_missed'?((row.days_overdue||0)>0?'overdue':'today'):''};
     (leadsByTl[tl]=leadsByTl[tl]||[]).push(lead);
     tlMeta[tl]=tlMeta[tl]||{name:h.tl_name||'Unassigned',ini:ini2(h.tl_name||'NA'),cluster:h.cluster||row.cluster};
   });
+  // Daily pick: each TL sees at most 20 leads — top 4 per category by breach urgency.
+  Object.keys(leadsByTl).forEach(tl=>{const byCat={};leadsByTl[tl].forEach(l=>(byCat[l.cat]=byCat[l.cat]||[]).push(l));let keep=[];CATS.forEach(c=>{keep=keep.concat((byCat[c.key]||[]).slice().sort((a,b)=>(b.urg-a.urg)||(b.days-a.days)).slice(0,4));});leadsByTl[tl]=keep;});
   const repsByTl={},repRiskByTl={};
   Object.keys(leadsByTl).forEach(tl=>{
     const ls=leadsByTl[tl],byRep={};
@@ -233,6 +311,8 @@ function myTlName(){const t=TLS().find(x=>x.me)||TLS().find(x=>x.email===S.tlEma
 function tierStyle(t,big){const c=t==='P1'?'background:var(--color-accent);color:var(--color-bg)':t==='P2'?'background:var(--color-accent-200);color:var(--color-accent-800)':'background:var(--color-accent-2-100);color:var(--color-accent-2-800)';return(big?'font-size:11px;font-weight:700;padding:3px 10px;':'font-size:10px;font-weight:700;padding:1px 7px;')+'border-radius:999px;white-space:nowrap;'+c;}
 
 // ---- render ----
+function cutoffLeft(){const now=new Date();const cut=new Date(now);cut.setHours(19,0,0,0);if(now>=cut)cut.setDate(cut.getDate()+1);let s=Math.max(0,Math.floor((cut-now)/1000));const p=n=>String(n).padStart(2,'0');return p(Math.floor(s/3600))+':'+p(Math.floor(s%3600/60))+':'+p(s%60);}
+function tickTimers(){const t=cutoffLeft();document.querySelectorAll('[data-timer]').forEach(el=>{el.textContent=t;});}
 const MUT=p=>'color-mix(in srgb,var(--color-text) '+p+'%,transparent)';
 function render(){
   const el=document.getElementById('app');
@@ -255,7 +335,7 @@ function nav(){
       <span style="width:28px;height:28px;border-radius:999px;background:var(--color-accent);display:grid;place-items:center"><span style="width:11px;height:11px;border-radius:999px;border:2.6px solid var(--color-bg)"></span></span>Lead Sentinel</span>
     <div class="seg" style="margin-left:6px">${seg('queue','Audit queue')}${seg('adher','My adherence')}${seg('rca','RCA audit')}${seg('mgr','Manager view')}${showSettings?seg('settings','Settings'):''}</div>
     <span style="flex:1"></span>
-    <span style="display:flex;align-items:center;gap:8px;padding:6px 14px;border-radius:999px;background:var(--color-surface);border:1px solid var(--color-divider)"><span style="width:8px;height:8px;border-radius:999px;background:var(--color-accent)"></span><span style="font-size:12.5px;font-weight:600;color:var(--color-accent-800)">Cutoff 7:00 PM · 3h 41m left</span></span>
+    <span style="display:flex;align-items:center;gap:8px;padding:6px 14px;border-radius:999px;background:var(--color-surface);border:1px solid var(--color-divider)"><span style="width:8px;height:8px;border-radius:999px;background:var(--color-accent)"></span><span style="font-size:12.5px;font-weight:600;color:var(--color-accent-800)">Cutoff 7:00 PM · <span data-timer style="font-variant-numeric:tabular-nums">${cutoffLeft()}</span> left</span></span>
     <span style="display:flex;align-items:center;gap:10px"><span style="display:flex;flex-direction:column;text-align:right;line-height:1.25"><span style="font-size:13px;font-weight:600">${esc(uName)}</span><span style="font-size:11px;color:${MUT(55)}">${esc(sub)}</span></span>${uPic?`<img src="${esc(uPic)}" alt="" style="width:38px;height:38px;border-radius:999px;object-fit:cover">`:`<span style="width:38px;height:38px;display:grid;place-items:center;border-radius:999px;background:var(--color-accent-200);color:var(--color-accent-800);font-weight:700;font-size:13px">${esc(uIni)}</span>`}${AUTH.enabled?`<button class="btn btn-ghost" data-act="signout" title="Sign out" style="padding:8px 10px;font-size:12px">Sign out</button>`:''}</span>
   </nav>`;
 }
@@ -281,22 +361,35 @@ function queueView(){
       ${auditPanel()}
     </div></div>`;
 }
+function whyStart(l){const f=WHYS[l.cat];return f?f(l):null;}
+function whyWalk(l){const root=whyStart(l);const idx=(S.audits[l.id]&&S.audits[l.id].whyIdx)||[];const steps=[];let node=root,terminal='';for(let k=0;k<idx.length;k++){const opt=node&&node.a[idx[k]];if(!opt)break;steps.push({q:node.q,opt});if(opt.root){terminal=opt.root;node=null;break;}node=opt.to;}return{steps,node,terminal};}
+function whyBlockHtml(l){
+  const w=whyWalk(l);let h='';
+  w.steps.forEach((s,i)=>{
+    h+=`<div style="display:flex;flex-direction:column;gap:7px"><div style="font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:${MUT(50)}">Why ${i+1}</div><div style="font-size:13px;line-height:1.45;color:${MUT(82)}">${esc(s.q)}</div><button data-act="whyBack" data-v="${i}" style="align-self:flex-start;display:inline-flex;align-items:center;gap:9px;padding:8px 13px;border-radius:999px;cursor:pointer;background:var(--color-accent);color:var(--color-bg);border:none;font-size:12.5px;font-weight:600"><span>${esc(s.opt.t)}</span><span style="opacity:.75;font-size:10.5px;font-weight:500">change</span></button></div>`;
+  });
+  if(w.node){
+    const n=w.steps.length+1;
+    const opts=w.node.a.map((o,i)=>`<button class="btn" data-act="why" data-v="${i}" style="justify-content:flex-start;text-align:left;padding:11px 15px;font-size:13px;background:var(--color-surface);border:1.5px solid ${MUT(15)};color:var(--color-text);border-radius:13px">${esc(o.t)}${o.root?`<span style="margin-left:auto;padding-left:12px;font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:${MUT(45)}">root</span>`:''}</button>`).join('');
+    h+=`<div style="display:flex;flex-direction:column;gap:11px"><div style="font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--color-accent-800)">Why ${n}${n>=5?' \u00b7 root':''}</div><div style="font-size:15px;line-height:1.4;font-family:var(--font-heading)">${esc(w.node.q)}</div><div style="display:flex;flex-direction:column;gap:9px">${opts}</div></div>`;
+  }
+  return h;
+}
 function auditPanel(){
   const l=L().find(x=>x.id===S.selId)||{timeline:[]};if(!l.id)return'<div></div>';
   const cat=catObj(S.catKey),a=S.audits[l.id]||{},p=prio(l.id),dl=catLeads(S.catKey),rank=dl.findIndex(x=>x.id===l.id)+1;
-  const done=rcaDone(l.id);
+  const done=rcaDone(l.id),w=whyWalk(l),concluded=!!w.terminal;
   const tl=l.timeline.map((r,i)=>{const dot=r.kind==='flag'?'width:17px;height:17px;border-radius:999px;background:var(--color-bg);border:3px solid var(--color-accent);box-shadow:0 0 0 4px var(--color-accent-100)':r.kind==='pending'?'width:14px;height:14px;border-radius:999px;background:transparent;border:2px solid '+MUT(26):'width:14px;height:14px;border-radius:999px;background:var(--color-accent-2)';
     const conn=i>0?`<span style="flex:1;height:2px;margin-top:7px;min-width:20px;${r.kind==='done'?'background:var(--color-accent-2)':'background:repeating-linear-gradient(90deg,var(--color-accent) 0 6px,transparent 6px 12px)'}"></span>`:'';
     return conn+`<span style="display:flex;flex-direction:column;align-items:center;gap:9px;width:96px;flex:none"><span style="${dot}"></span><span style="font-size:10.5px;line-height:1.4;text-align:center;color:${r.kind==='flag'?'var(--color-accent-800)':MUT(60)}">${esc(r.what)}<br><span style="opacity:.7">${esc(r.when)}</span></span></span>`;}).join('');
   const factors=[['Urgency',p.urg],['Rep risk',p.repRisk]].map(f=>`<span style="display:flex;flex-direction:column;gap:4px;width:78px"><span style="display:flex;justify-content:space-between;gap:6px"><span style="font-size:10px;color:${MUT(55)}">${f[0]}</span><span style="font-size:10px;font-weight:700">${f[1]}</span></span><span style="height:5px;border-radius:999px;background:${MUT(9)};overflow:hidden"><span style="display:block;height:100%;width:${f[1]}%;background:var(--color-accent);border-radius:999px"></span></span></span>`).join('');
   const sev=SEVS.map(s=>`<button class="btn" data-act="sev" data-v="${s[0]}" style="padding:8px 14px;font-size:12.5px;border:1.5px solid ${a.sev===s[0]?(s[0]==='high'?'var(--color-accent-700);background:var(--color-accent-200);color:var(--color-accent-800)':s[0]==='med'?'var(--color-accent);background:var(--color-accent-100);color:var(--color-accent-800)':'var(--color-accent-2);background:var(--color-accent-2-100);color:var(--color-accent-2-800)'):MUT(16)+';color:'+MUT(65)}">${s[1]}</button>`).join('');
-  const rcaBlock=`<div style="display:flex;flex-direction:column;gap:16px;background:var(--color-accent-100);border-radius:18px;padding:18px">
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px"><span style="font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--color-accent-800)">RCA &amp; action</span><span class="${done?'tag tag-accent-2':'tag tag-neutral'}">${done?'RCA submitted ✓':'RCA pending'}</span></div>
-      <div style="display:grid;grid-template-columns:1fr auto;gap:16px;align-items:end">
-        <div class="field"><label>Root cause — why did this deviation happen?</label><select class="input" data-act="reason"><option value=""${a.reason?'':' selected'}>— select the root cause —</option>${cat.reasons.map(r=>`<option ${a.reason===r?'selected':''}>${esc(r)}</option>`).join('')}</select></div>
-        <div class="field"><label>Severity</label><div style="display:flex;gap:8px">${sev}</div></div></div>
-      <div class="field"><label>Coaching note to ${esc(l.rep)}</label><textarea class="input" data-act="note" rows="2" placeholder="One clear line the rep can act on…" style="min-height:auto;resize:none">${esc(a.note||'')}</textarea></div>
-      <div class="field"><label>Corrective action</label><select class="input" data-act="action">${ACTIONS.map(o=>`<option ${a.action===o?'selected':''}>${esc(o)}</option>`).join('')}</select></div></div>`;
+  const rcaBlock=`<div style="display:flex;flex-direction:column;gap:18px;background:var(--color-accent-100);border-radius:18px;padding:20px">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px"><span style="font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--color-accent-800)">Root-cause drill-down · 5 Whys</span><span class="${done?'tag tag-accent-2':'tag tag-neutral'}">${done?'Root cause found ✓':'In progress'}</span></div>
+      <div style="display:flex;flex-direction:column;gap:16px">${whyBlockHtml(l)}</div>
+      ${concluded?`<div style="display:flex;gap:12px;background:var(--color-accent-2-100);border-radius:14px;padding:14px 16px;align-items:flex-start"><span style="width:26px;height:26px;flex:none;display:grid;place-items:center;border-radius:999px;background:var(--color-accent-2);color:var(--color-bg);font-weight:700;font-size:13px">✓</span><div style="line-height:1.45"><div style="font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--color-accent-2-800);margin-bottom:3px">Root cause</div><div style="font-size:14.5px;color:var(--color-accent-2-900)">${esc(w.terminal)}</div></div><span style="flex:1"></span><button class="btn" data-act="whyBack" data-v="0" style="font-size:11.5px;padding:6px 12px;align-self:center;border:1px solid ${MUT(20)}">Restart</button></div>
+      <div style="display:grid;grid-template-columns:1fr auto;gap:16px;align-items:end"><div class="field"><label>Corrective action</label><select class="input" data-act="action">${ACTIONS.map(o=>`<option ${a.action===o?'selected':''}>${esc(o)}</option>`).join('')}</select></div><div class="field"><label>Severity</label><div style="display:flex;gap:8px">${sev}</div></div></div>
+      <div class="field"><label>Coaching note to ${esc(l.rep)}</label><textarea class="input" data-act="note" rows="2" placeholder="One clear line the rep can act on…" style="min-height:auto;resize:none">${esc(a.note||'')}</textarea></div>`:''}</div>`;
   const tagcls='tag '+(S.catKey==='mcch_past'||S.catKey==='mcch_future'?'tag-accent-2':'tag-accent');
   return `<div class="card elev-sm" style="padding:0;overflow:hidden">
     <div style="padding:22px 26px 18px;display:flex;align-items:flex-start;justify-content:space-between;gap:16px;border-bottom:1px solid var(--color-divider)">
@@ -308,7 +401,7 @@ function auditPanel(){
       <div><div style="font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:${MUT(52)};margin-bottom:6px">What breached here</div><div style="font-size:14px;line-height:1.55;color:${MUT(88)}">${esc(cat.check)}</div></div>
       <div style="background:var(--color-bg);border-radius:16px;padding:18px 18px 16px;border:1px solid var(--color-divider)"><div style="font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:${MUT(50)};margin-bottom:16px">Lead history</div><div class="ls-scroll" style="display:flex;align-items:flex-start;overflow-x:auto">${tl}</div></div>
       ${rcaBlock}
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px"><button class="btn btn-secondary" data-act="prev" style="font-size:13px">← Previous</button><span style="font-size:11.5px;color:${MUT(45)}">${done?'RCA submitted ✓':'Root cause not set yet — pick one to submit'}</span><button class="btn btn-primary" data-act="next">Submit RCA &amp; next →</button></div>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px"><button class="btn btn-secondary" data-act="prev" style="font-size:13px">← Previous</button><span style="font-size:11.5px;color:${MUT(45)}">${done?'RCA submitted ✓':'Work through the 5 Whys to reach the root cause'}</span><button class="btn btn-primary" data-act="next">Submit RCA &amp; next →</button></div>
     </div></div>`;
 }
 function adherView(){
@@ -327,7 +420,7 @@ function adherView(){
     <div style="padding:14px 0 20px"><h2 style="margin:0;font-size:30px">My adherence</h2><div style="font-size:13.5px;color:${MUT(60)}">Friday, 25 Jul 2026 · same-day cutoff at 7:00 PM — any breach without an RCA by then counts against you</div></div>
     <div style="display:grid;grid-template-columns:1.7fr 1fr 1fr;gap:18px;padding-bottom:20px">
       <div class="card elev-sm" style="padding:22px 24px;flex-direction:row;align-items:center;gap:22px;justify-content:space-around">
-        <div style="display:flex;align-items:center;gap:16px">${ring(Math.round(pct/100*360),'var(--color-accent-2)',pct)}<div style="line-height:1.35"><div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:${MUT(55)}">Today</div><div style="font-family:var(--font-heading);font-size:20px;margin-top:2px">${done} of ${total}</div><div style="font-size:12px;color:${MUT(60)}">${miss} open · 3h 41m left</div></div></div>
+        <div style="display:flex;align-items:center;gap:16px">${ring(Math.round(pct/100*360),'var(--color-accent-2)',pct)}<div style="line-height:1.35"><div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:${MUT(55)}">Today</div><div style="font-family:var(--font-heading);font-size:20px;margin-top:2px">${done} of ${total}</div><div style="font-size:12px;color:${MUT(60)}">${miss} open · <span data-timer style="font-variant-numeric:tabular-nums">${cutoffLeft()}</span> left</div></div></div>
         <span style="width:1px;align-self:stretch;background:var(--color-divider)"></span>
         <div style="display:flex;align-items:center;gap:16px">${ring(Math.round(mtdPct/100*360),'var(--color-accent)',mtdPct)}<div style="line-height:1.35"><div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:${MUT(55)}">Month to date</div><div style="font-family:var(--font-heading);font-size:20px;margin-top:2px">${MTD.audited} of ${MTD.total}</div><div style="font-size:12px;color:${MUT(60)}">${MTD.range} · ${mtdMiss} missed</div></div></div>
       </div>
@@ -434,6 +527,8 @@ document.addEventListener('click',e=>{
   else if(act==='cat'){S.catKey=v;S.selId=(catLeads(v)[0]||{}).id;render();}
   else if(act==='lead'){S.selId=v;render();}
   else if(act==='sev'){patch(S.selId,{sev:v});render();}
+  else if(act==='why'){const l=L().find(x=>x.id===S.selId);if(!l)return;const idx=((S.audits[S.selId]&&S.audits[S.selId].whyIdx)||[]).slice();idx.push(+v);patch(S.selId,{whyIdx:idx});const w=whyWalk(l);if(w.terminal){patch(S.selId,{reason:w.terminal});if(!(S.audits[S.selId]&&S.audits[S.selId].sev))patch(S.selId,{sev:'med'});}else patch(S.selId,{reason:''});render();}
+  else if(act==='whyBack'){const idx=((S.audits[S.selId]&&S.audits[S.selId].whyIdx)||[]).slice(0,+v);patch(S.selId,{whyIdx:idx,reason:''});render();}
   else if(act==='prev'){const dl=catLeads(S.catKey),i=dl.findIndex(x=>x.id===S.selId);S.selId=dl[(i-1+dl.length)%dl.length].id;render();}
   else if(act==='next'){const dl=catLeads(S.catKey),i=dl.findIndex(x=>x.id===S.selId);for(let k=1;k<=dl.length;k++){const j=(i+k)%dl.length;if(!rcaDone(dl[j].id)){S.selId=dl[j].id;render();return;}}S.selId=dl[(i+1)%dl.length].id;render();}
   else if(act==='rcaAccept'){const cur=S.rcaReview[v]||{};patchRv(v,{verdict:cur.verdict==='accept'?null:'accept'});render();}
@@ -455,6 +550,7 @@ document.addEventListener('input',e=>{const t=e.target.closest('[data-act]');if(
 });
 document.addEventListener('keydown',e=>{const t=e.target.closest&&e.target.closest('[data-act="auditorInput"]');if(t&&e.key==='Enter'){e.preventDefault();ensureAuditors();const em=(S.newAuditor||'').trim().toLowerCase();if(em&&!S.rcaAuditors.includes(em)){S.rcaAuditors=[...S.rcaAuditors,em];persistAuditors();}S.newAuditor='';render();}});
 
+setInterval(tickTimers,1000);
 load();
 </script>
 </body>
