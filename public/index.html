@@ -56,6 +56,11 @@ const RCA_SEEDS=[
  {id:'s5',lead:'Farah Khan',rep:'Megha Rai',tl:'Prabhat Samal',cat:'followup_missed',rca:'Reassigned but not actioned',action:'Reassign to another rep',sev:'med',when:'Yesterday'},
  {id:'s6',lead:'Nikhil Jain',rep:'Saloni Singh',tl:'Prabhat Samal',cat:'not_interested',rca:'Closed before MD (too early)',action:'Escalate to manager',sev:'high',when:'Yesterday'},
 ];
+const DEFAULT_AUDITORS=['quality.desk@solarsquare.in'];
+const ADMIN_FALLBACK=['analytics.sse@solarsquare.in'];
+const adminEmails=()=>AUTH.admins&&AUTH.admins.length?AUTH.admins:ADMIN_FALLBACK;
+const nameFromEmail=e=>{const s=String(e||'').split('@')[0];return s.split(/[._]+/).filter(Boolean).map(w=>w[0].toUpperCase()+w.slice(1)).join(' ')||e;};
+const ROLECLS={ADOS:'tag tag-accent-2',ZSM:'tag tag-accent',TL:'tag tag-outline',LRM:'tag tag-neutral'};
 const MON=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 const esc=s=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const norm=e=>String(e||'').trim().toLowerCase().replace('@homes.solarsquare.in','@solarsquare.in');
@@ -64,7 +69,7 @@ const first1=n=>String(n||'').split(' ')[0];
 const fmtD=iso=>{if(!iso)return'';const d=new Date(iso);return isNaN(d)?'':d.getDate()+' '+MON[d.getMonth()];};
 const catObj=k=>CATS.find(c=>c.key===k);
 
-const S={screen:'queue',tlEmail:null,catKey:'mcch_past',selId:null,audits:{},rcaReview:{},showRules:false,model:null,src:'demo',role:'demo',user:null,meEmail:null};
+const S={screen:'queue',tlEmail:null,catKey:'mcch_past',selId:null,audits:{},rcaReview:{},showRules:false,model:null,src:'demo',role:'demo',user:null,meEmail:null,hier:[],rcaAuditors:null,newAuditor:'',dirQ:''};
 
 const AUTH={enabled:true,ready:false,clientId:'',domain:'solarsquare.in',admins:[]};
 const LOGO_SRC='https://cdn.solarsquare.in/blog/wp-content/uploads/2025/11/05101757/logo.webp';
@@ -192,7 +197,7 @@ function buildModel(queue,hier){
   const tls=Object.keys(leadsByTl).map((tl,i)=>{const ls=leadsByTl[tl],m=tlMeta[tl],od=ls.filter(l=>l.days>2).length;
     return{email:tl,name:m.name,ini:m.ini,cluster:m.cluster,total:ls.length,me:tl===meTl,
       simAudited:tl===curTl?null:Math.max(0,ls.length-(i%3)),simDev:tl===curTl?null:od,simHigh:tl===curTl?null:Math.round(od/2),topGap:topCat(ls)};});
-  S.model={leadsByTl,repsByTl,repRiskByTl,tls,curTl};S.tlEmail=curTl;
+  S.model={leadsByTl,repsByTl,repRiskByTl,tls,curTl};S.tlEmail=curTl;S.hier=hier||[];
   const first=(leadsByTl[curTl].filter(l=>l.cat==='mcch_past').sort((a,b)=>b.urg-a.urg)[0]||leadsByTl[curTl][0]||{});
   S.selId=first.id;
 }
@@ -231,10 +236,12 @@ function tierStyle(t,big){const c=t==='P1'?'background:var(--color-accent);color
 const MUT=p=>'color-mix(in srgb,var(--color-text) '+p+'%,transparent)';
 function render(){
   const el=document.getElementById('app');
-  el.innerHTML=nav()+(S.screen==='queue'?queueView():S.screen==='adher'?adherView():S.screen==='rca'?rcaView():mgrView());
+  const scr=(S.screen==='settings'&&S.role!=='admin')?'queue':S.screen;
+  el.innerHTML=nav()+(scr==='queue'?queueView():scr==='adher'?adherView():scr==='rca'?rcaView():scr==='settings'?settingsView():mgrView());
 }
 function nav(){
   const meTl=TLS().find(t=>t.me);
+  const showSettings=(S.role==='admin');
   const uName=(S.user&&(S.user.name||S.user.email))||(meTl&&meTl.name)||'—';
   const uPic=S.user&&S.user.picture;
   const roleLbl=ROLE_LABEL[S.role]||'Team Lead';
@@ -246,7 +253,7 @@ function nav(){
       ${logoImg(22)}
       <span style="width:1px;height:20px;background:var(--color-divider)"></span>
       <span style="width:28px;height:28px;border-radius:999px;background:var(--color-accent);display:grid;place-items:center"><span style="width:11px;height:11px;border-radius:999px;border:2.6px solid var(--color-bg)"></span></span>Lead Sentinel</span>
-    <div class="seg" style="margin-left:6px">${seg('queue','Audit queue')}${seg('adher','My adherence')}${seg('rca','RCA audit')}${seg('mgr','Manager view')}</div>
+    <div class="seg" style="margin-left:6px">${seg('queue','Audit queue')}${seg('adher','My adherence')}${seg('rca','RCA audit')}${seg('mgr','Manager view')}${showSettings?seg('settings','Settings'):''}</div>
     <span style="flex:1"></span>
     <span style="display:flex;align-items:center;gap:8px;padding:6px 14px;border-radius:999px;background:var(--color-surface);border:1px solid var(--color-divider)"><span style="width:8px;height:8px;border-radius:999px;background:var(--color-accent)"></span><span style="font-size:12.5px;font-weight:600;color:var(--color-accent-800)">Cutoff 7:00 PM · 3h 41m left</span></span>
     <span style="display:flex;align-items:center;gap:10px"><span style="display:flex;flex-direction:column;text-align:right;line-height:1.25"><span style="font-size:13px;font-weight:600">${esc(uName)}</span><span style="font-size:11px;color:${MUT(55)}">${esc(sub)}</span></span>${uPic?`<img src="${esc(uPic)}" alt="" style="width:38px;height:38px;border-radius:999px;object-fit:cover">`:`<span style="width:38px;height:38px;display:grid;place-items:center;border-radius:999px;background:var(--color-accent-200);color:var(--color-accent-800);font-weight:700;font-size:13px">${esc(uIni)}</span>`}${AUTH.enabled?`<button class="btn btn-ghost" data-act="signout" title="Sign out" style="padding:8px 10px;font-size:12px">Sign out</button>`:''}</span>
@@ -370,6 +377,36 @@ function rcaView(){
     </div>
     <div style="display:flex;flex-direction:column;gap:14px">${cards}</div></div>`;
 }
+function ensureAuditors(){if(S.rcaAuditors==null){try{const v=JSON.parse(localStorage.getItem('ls_rca_auditor_emails')||'null');S.rcaAuditors=Array.isArray(v)?v:DEFAULT_AUDITORS.slice();}catch(e){S.rcaAuditors=DEFAULT_AUDITORS.slice();}}}
+function persistAuditors(){try{localStorage.setItem('ls_rca_auditor_emails',JSON.stringify(S.rcaAuditors));}catch(e){}}
+function buildDir(){
+  const H=S.hier||[];const tl=new Map(),zsm=new Map(),ados=new Map();
+  H.forEach(a=>{if(a.tl_email)tl.set(a.tl_email,{name:a.tl_name||nameFromEmail(a.tl_email),email:a.tl_email});if(a.zsm_email)zsm.set(a.zsm_email,{name:a.zsm_name||nameFromEmail(a.zsm_email),email:a.zsm_email});if(a.ados_email)ados.set(a.ados_email,{name:a.ados_name||nameFromEmail(a.ados_email),email:a.ados_email});});
+  const scope=(f,e)=>H.filter(x=>x[f]===e).length;
+  const rows=[...[...ados.values()].map(p=>({...p,role:'ADOS',scope:scope('ados_email',p.email)})),...[...zsm.values()].map(p=>({...p,role:'ZSM',scope:scope('zsm_email',p.email)})),...[...tl.values()].map(p=>({...p,role:'TL',scope:scope('tl_email',p.email)})),...H.map(a=>({name:a.rep_name,email:a.rep_email,role:'LRM',scope:1}))];
+  return{rows,ados:ados.size,zsm:zsm.size,tl:tl.size,lrm:H.length};
+}
+function settingsView(){
+  ensureAuditors();
+  const admins=adminEmails(),me=(S.user&&S.user.email||'').toLowerCase();
+  const dir=buildDir(),q=(S.dirQ||'').trim().toLowerCase();
+  const rows=dir.rows.filter(r=>!q||(r.name&&r.name.toLowerCase().includes(q))||(r.email&&r.email.toLowerCase().includes(q)));
+  const em=`font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px;color:${MUT(70)}`;
+  const adminRows=admins.map(e=>`<div style="display:flex;align-items:center;justify-content:space-between;gap:10px"><span style="${em}">${esc(e)}</span>${e===me?'<span class="tag tag-accent">You</span>':''}</div>`).join('');
+  const audRows=S.rcaAuditors.length?S.rcaAuditors.map(e=>`<div style="display:flex;align-items:center;justify-content:space-between;gap:10px"><span style="${em}">${esc(e)}</span><div style="display:flex;align-items:center;gap:8px">${e===me?'<span class="tag tag-accent">You</span>':''}<button class="btn" data-act="auditorRemove" data-v="${esc(e)}" title="Remove" style="width:26px;height:26px;padding:0;border:1px solid var(--color-divider);font-size:14px;line-height:1;color:${MUT(60)}">×</button></div></div>`).join(''):`<span style="font-size:12.5px;color:${MUT(55)}">No RCA auditors configured.</span>`;
+  const stat=(l,v,s)=>`<div class="card elev-sm" style="padding:20px 22px;gap:4px"><div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:${MUT(55)}">${l}</div><div style="font-family:var(--font-heading);font-size:34px;line-height:1">${v}</div><div style="font-size:11.5px;color:${MUT(55)}">${s}</div></div>`;
+  const trows=rows.length?rows.map(r=>`<tr><td><span style="display:flex;align-items:center;gap:9px"><span style="width:26px;height:26px;flex:none;display:grid;place-items:center;border-radius:999px;background:var(--color-accent-200);color:var(--color-accent-800);font-size:10px;font-weight:700">${esc(ini2(r.name))}</span><span style="font-weight:600;font-size:13px">${esc(r.name||'—')}</span></span></td><td><span style="${em}">${esc(r.email)}</span></td><td style="text-align:center"><span class="${ROLECLS[r.role]}">${r.role}</span></td><td style="text-align:center">${r.scope}</td></tr>`).join(''):`<tr><td colspan="4" style="text-align:center;padding:24px;color:${MUT(55)}">No matches</td></tr>`;
+  return `<div class="wrap" style="padding-bottom:44px;animation:lsfade .25s ease">
+    <div style="padding:14px 0 20px"><h2 style="margin:0;font-size:30px">Settings</h2><div style="font-size:13.5px;color:${MUT(60)}">Admin-only · access lists and the resolved org chart — who sees what, and why.</div></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;padding-bottom:20px">
+      <div class="card elev-sm" style="padding:22px 24px;gap:6px"><div style="font-size:14px;font-weight:700">Admin access</div><div style="font-size:12px;color:${MUT(60)};margin-bottom:8px">Unrestricted — sees every team and screen, regardless of org position.</div><div style="display:flex;flex-direction:column;gap:10px">${adminRows}</div><div style="font-size:11.5px;color:${MUT(48)};line-height:1.5;margin-top:12px">Fixed in server config (<code>ADMIN_EMAILS</code>). Changing this list needs a redeploy.</div></div>
+      <div class="card elev-sm" style="padding:22px 24px;gap:6px"><div style="font-size:14px;font-weight:700">RCA auditors</div><div style="font-size:12px;color:${MUT(60)};margin-bottom:8px">Can open the RCA audit tab and review any TL's root-cause analysis across teams.</div><div style="display:flex;flex-direction:column;gap:10px">${audRows}</div><div style="display:flex;gap:8px;margin-top:14px"><input class="input" data-act="auditorInput" type="email" value="${esc(S.newAuditor||'')}" placeholder="name@solarsquare.in" style="flex:1"><button class="btn btn-primary" data-act="auditorAdd" style="flex:0 0 auto">Add</button></div><div style="font-size:11.5px;color:${MUT(48)};line-height:1.5;margin-top:12px">Saved to this browser only (not shared with other admins). For a permanent, company-wide change, set the <code>RCA_AUDITOR_EMAILS</code> Vercel env var instead.</div></div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:18px;padding-bottom:20px">${stat('ADOS',dir.ados,'reporting lines')}${stat('ZSMs',dir.zsm,'reporting lines')}${stat('Team Leads',dir.tl,'reporting lines')}${stat('LRMs',dir.lrm,'in EmployeeMaster')}</div>
+    <div class="card elev-sm" style="padding:0;overflow:hidden"><div style="padding:16px 20px;border-bottom:1px solid var(--color-divider)"><input class="input" data-act="dirSearch" value="${esc(S.dirQ||'')}" placeholder="Search name or email…" style="max-width:320px"></div><div style="max-height:440px;overflow:auto"><table class="table"><thead><tr><th>Name</th><th>Email</th><th style="text-align:center">Role</th><th style="text-align:center">Team size</th></tr></thead><tbody>${trows}</tbody></table></div></div>
+  </div>`;
+}
+function renderKeepFocus(sel){render();const el=document.querySelector(sel);if(el){el.focus();try{const n=el.value.length;el.setSelectionRange(n,n);}catch(e){}}}
 function mgrView(){
   const done=audited(),hi=L().filter(l=>{const x=S.audits[l.id];return x&&x.reason&&x.sev==='high';}).length;
   const rows=TLS().map(t=>{const tot=t.total||20,au=t.me?done:(t.simAudited!=null?t.simAudited:tot),dv=t.me?done:(t.simDev||0),h=t.me?hi:(t.simHigh||0),ad=Math.round(au/tot*100);
@@ -402,6 +439,8 @@ document.addEventListener('click',e=>{
   else if(act==='rcaAccept'){const cur=S.rcaReview[v]||{};patchRv(v,{verdict:cur.verdict==='accept'?null:'accept'});render();}
   else if(act==='rcaRework'){const cur=S.rcaReview[v]||{};patchRv(v,{verdict:cur.verdict==='rework'?null:'rework'});render();}
   else if(act==='rcaNotify'){patchRv(v,{notified:true});render();}
+  else if(act==='auditorAdd'){ensureAuditors();const e=(S.newAuditor||'').trim().toLowerCase();if(e&&!S.rcaAuditors.includes(e)){S.rcaAuditors=[...S.rcaAuditors,e];persistAuditors();}S.newAuditor='';render();}
+  else if(act==='auditorRemove'){ensureAuditors();S.rcaAuditors=S.rcaAuditors.filter(x=>x!==v);persistAuditors();render();}
 });
 document.addEventListener('change',e=>{const t=e.target.closest('[data-act]');if(!t)return;
   if(t.dataset.act==='reason'){patch(S.selId,{reason:t.value});if(t.value&&!(S.audits[S.selId]&&S.audits[S.selId].sev))patch(S.selId,{sev:'med'});render();}
@@ -411,7 +450,10 @@ document.addEventListener('change',e=>{const t=e.target.closest('[data-act]');if
 document.addEventListener('input',e=>{const t=e.target.closest('[data-act]');if(!t)return;
   if(t.dataset.act==='note'){S.audits[S.selId]=Object.assign({},S.audits[S.selId],{note:t.value});}
   else if(t.dataset.act==='rcaNote'){S.rcaReview[t.dataset.v]=Object.assign({verdict:null,assignee:'',notified:false},S.rcaReview[t.dataset.v],{note:t.value});}
+  else if(t.dataset.act==='auditorInput'){S.newAuditor=t.value;}
+  else if(t.dataset.act==='dirSearch'){S.dirQ=t.value;renderKeepFocus('[data-act="dirSearch"]');}
 });
+document.addEventListener('keydown',e=>{const t=e.target.closest&&e.target.closest('[data-act="auditorInput"]');if(t&&e.key==='Enter'){e.preventDefault();ensureAuditors();const em=(S.newAuditor||'').trim().toLowerCase();if(em&&!S.rcaAuditors.includes(em)){S.rcaAuditors=[...S.rcaAuditors,em];persistAuditors();}S.newAuditor='';render();}});
 
 load();
 </script>
