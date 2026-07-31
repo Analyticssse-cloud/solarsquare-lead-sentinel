@@ -1,5 +1,20 @@
 # SolarSquare Lead Sentinel — Vercel Deploy
 
+## First-run checklist
+
+Three things gate real data. Until all three are done the app runs but the queue is empty.
+
+- [ ] **1. Metabase card runs the current query.** Card `4447` → edit → replace the SQL with
+      `audit_queue_daily_v5.sql` → Save. Confirm the result grid has an `lrm_email` column
+      with addresses in it — a blank one is the failure that empties every screen.
+- [ ] **2. `QUEUE_SHEET_ID`** set in Vercel to the app's own spreadsheet (not the shared
+      mapping sheet), and that sheet shared with `GOOGLE_SA_EMAIL` as **Editor**.
+- [ ] **3. `RCA_SHEET_ID`** set (can be the same spreadsheet). Without it, RCA submissions
+      stay in the auditor's browser and Team progress shows Done = 0.
+
+Verify all three at once by opening `/api/debug` — it reports which spreadsheet each tab
+came from and ends with a plain-English verdict.
+
 Same structure as `solarsquare-lrm`: plain HTML front-end + Vercel serverless functions, **no build step**. Same Google service account.
 
 The tool reads **two tabs** from the Google Sheet and merges them on `lrm_email` in the browser:
@@ -11,11 +26,23 @@ The tool reads **two tabs** from the Google Sheet and merges them on `lrm_email`
 | `LRM_TL_MAP`  | LRM → TL / ZSM / ADOS mapping (dynamic) | maintained for the QA / LRM dashboards — **read only, never written to** |
 
 The daily job is `apps-script/AuditQueueDaily.gs` — same pattern as the IVR master sheet:
-log in to Metabase, run the saved card (`audit_queue_daily_v4.sql`), append to
-`Audit_Queue_Log`, and refresh `Audit_Queue`. It is idempotent — a second run on the same
-`audit_date` exits without writing (use `deleteToday()` to force a re-export) — and it trims
-the log past `KEEP_DAYS` (120). Set the Metabase credentials as Script Properties and add a
-daily 6–7 AM IST trigger; setup notes are in the file header.
+log in to Metabase, run the saved card (`audit_queue_daily_v5.sql`), append to
+`Audit_Queue_Log`, and refresh `Audit_Queue`. It trims the log past `KEEP_DAYS` (120).
+
+**Scheduling.** Set the script timezone to IST (Project Settings), then run
+`installDailyTrigger()` once — it installs a **3 PM daily** trigger calling
+`refreshAuditQueue()`, and runs an export immediately so you can see it work. Re-running it
+is safe: it deletes any existing trigger first, so you can't end up with two.
+
+Two entry points, deliberately different:
+
+| Function | Behaviour |
+|---|---|
+| `exportAuditQueue()` | First write of the day. **Skips** if today is already logged. |
+| `refreshAuditQueue()` | What the 3 PM trigger calls. **Replaces** today's rows. |
+
+The 3 PM refresh has to replace rather than skip — its whole point is to pick up the
+morning's work, and an idempotent skip would make it a no-op.
 
 The API also guards this: if it is ever pointed at the append-only log, it keeps only the
 **newest `audit_date`** present, so history can never stack into one day's queue.
@@ -44,6 +71,13 @@ column names — see the lines marked `(A)` and `(D)` in the query, and run
 
 Both only ever make the tool *under*-report leaks, never over-report. Dial counts are
 already scoped to `>= lrm_assigned_at`, so a previous owner's calls can't leak in.
+
+### Who appears in the queue
+
+The queue is scoped to `EmployeeMaster` **before it leaves the API**. An LRM who isn't in
+the mapping sheet has no TL, so nobody could review their leads — carrying those rows would
+only cause confusion, so they're dropped. `/api/debug` reports the count
+(`excludedRowsUnmappedLrm`) so the exclusion stays visible rather than silent.
 
 ### If the queue comes back empty
 
