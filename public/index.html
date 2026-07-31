@@ -140,7 +140,7 @@ const ACTLBL={call:'Call logged',stage_change:'Stage changed',meeting_done:'Meet
 const LEAKLBL={L1:'Meeting date passed, nothing since',L2:'Marked CNC, never re-dialled',L3:'Call-later loop turning, no close',L4:'Closed with no connected call',L4b:'Closed \u2014 check the reason',L0:'Watch only'};const silentLbl=l=>{if(l.lastAt==null)return'never touched';const h=l.hoursSilent||0;if(h<24)return h<=1?'active this hour':h+'h silent';return (l.silent||Math.round(h/24))+'d silent';};
 const catObj=k=>CATS.find(c=>c.key===k);
 
-const S={screen:'queue',recs:{},recBusy:null,rcaLog:[],rcaPending:0,rcaErr:'',auditRaw:'',auditDate:'',tlEmail:null,catKey:'mcch_past',selId:null,audits:{},rcaReview:{},showRules:false,model:null,src:'live',role:'tl',user:null,meEmail:null,hier:[],rcaAuditors:null,newAuditor:'',dirQ:''};
+const S={screen:'queue',recs:{},recBusy:null,rcaLog:[],rcaPending:0,rcaErr:'',diag:null,diagState:'',auditRaw:'',auditDate:'',tlEmail:null,catKey:'mcch_past',selId:null,audits:{},rcaReview:{},showRules:false,model:null,src:'live',role:'tl',user:null,meEmail:null,hier:[],rcaAuditors:null,newAuditor:'',dirQ:''};
 
 const AUTH={enabled:true,ready:false,clientId:'',domain:'solarsquare.in',admins:[]};
 const LOGO_SRC='https://cdn.solarsquare.in/blog/wp-content/uploads/2025/11/05101757/logo.webp';
@@ -301,6 +301,7 @@ async function load(){
   render();
   loadRcaLog();
   flushRca();
+  if(!(data.queue||[]).length)loadDiag();
 }
 
 function buildModel(queue,hier){
@@ -454,6 +455,49 @@ function mtdStats(){
 // the teams did with it, never a queue of their own.
 const isTL=()=>S.role==='tl';
 function isAud(){ensureAuditors();const me=norm((S.user&&S.user.email)||S.meEmail||'');return S.role==='admin'||(!!me&&S.rcaAuditors.map(norm).includes(me));}
+// When the queue comes back empty, the app should say WHY rather than assume a quiet day.
+// /api/debug runs the same pull and reports where the rows were lost.
+async function loadDiag(){
+  if(SAMPLE||S.diag||S.diagState==='loading')return;
+  S.diagState='loading';render();
+  try{
+    const r=await fetch('/api/debug',{headers:authHeaders()});
+    if(!r.ok){S.diag={verdict:'Diagnostic endpoint returned HTTP '+r.status+'.'};}
+    else S.diag=await r.json();
+  }catch(e){S.diag={verdict:'Could not reach /api/debug: '+String(e&&e.message||e)};}
+  S.diagState='done';render();
+}
+function diagBlock(){
+  // Sample mode has no API to ask, and a diagnostic that was never requested must render
+  // nothing — never a pending message that cannot resolve.
+  if(SAMPLE)return'';
+  const d=S.diag;
+  if(!d)return S.diagState==='loading'
+    ? `<div style="font-size:13px;color:${MUT(45)};padding-top:26px">Checking where the rows went…</div>`
+    : `<div style="padding-top:26px"><button data-act="diag" style="background:none;border:none;padding:0;cursor:pointer;font-family:inherit;font-size:13px;color:${MUT(52)};text-decoration:underline">Check why the queue is empty</button></div>`;
+  const p=d.pull||{};
+  const row=(k,v)=>`<div style="display:flex;align-items:baseline;gap:12px;padding:7px 0;border-bottom:1px solid var(--color-divider)"><span style="font-size:13px;color:${MUT(55)}">${k}</span><span style="flex:1"></span><span style="font-size:13.5px;font-variant-numeric:tabular-nums">${v}</span></div>`;
+  const em=a=>(a&&a.length)?a.map(esc).join(', '):'—';
+  return `<div style="padding-top:34px;max-width:78ch">
+    <div style="font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:${MUT(40)};padding-bottom:8px">Diagnosis</div>
+    <div style="font-size:15px;line-height:1.55;text-wrap:pretty;padding-bottom:20px">${esc(d.verdict||'No verdict returned.')}</div>
+    <div style="border-top:1px solid var(--color-text)">
+      ${row('Source',esc(p.source||'—'))}
+      ${row('Queue rows pulled',p.queueRows!=null?p.queueRows:'—')}
+      ${row('Mapping rows',p.hierarchyRows!=null?p.hierarchyRows:'—')}
+      ${row('LRMs in queue · in mapping · matched',(p.distinctLrmInQueue||0)+' · '+(p.distinctLrmInMap||0)+' · <b>'+(p.lrmMatchedBoth||0)+'</b>')}
+      ${row('Queue rows with no LRM email',p.queueRowsWithBlankLrmEmail!=null?p.queueRowsWithBlankLrmEmail:'—')}
+      ${p.queueRowsResolvedByName?row('Matched to a TL by name instead',p.queueRowsResolvedByName):''}
+    </div>
+    ${p.sampleQueueLrmEmails?`<div style="display:grid;grid-template-columns:1fr 1fr;gap:34px;padding-top:22px">
+      <div><div style="font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:${MUT(40)};padding-bottom:6px">LRM emails in the queue</div><div style="font-size:12.5px;line-height:1.6;color:${MUT(60)};word-break:break-word">${em(p.sampleQueueLrmEmails)}</div></div>
+      <div><div style="font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:${MUT(40)};padding-bottom:6px">LRM emails in the mapping</div><div style="font-size:12.5px;line-height:1.6;color:${MUT(60)};word-break:break-word">${em(p.sampleMapLrmEmails)}</div></div>
+    </div>`:''}
+    ${p.sampleTlEmails?`<div style="padding-top:22px"><div style="font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:${MUT(40)};padding-bottom:6px">TL emails the mapping knows</div><div style="font-size:12.5px;line-height:1.6;color:${MUT(60)};word-break:break-word">${em(p.sampleTlEmails)}</div><div style="font-size:12.5px;color:${MUT(45)};padding-top:8px">You are signed in as <b>${esc((S.user&&S.user.email)||'—')}</b>. If that address is not in this list, the mapping sheet does not know you as a TL and no leads can reach you.</div></div>`:''}
+    <div style="padding-top:20px"><a href="/api/debug" target="_blank" style="font-size:12.5px">Open the full diagnostic</a></div>
+  </div>`;
+}
+
 function screensFor(){
   // A TL audits their own team's leads and tracks their own adherence — nothing else.
   // Cross-team progress is a manager's question, so 'mgr' is not offered to TLs.
@@ -568,8 +612,8 @@ function queueView(){
   const total=L().length,done=audited();
   if(!total)return `<div class="wrap" style="padding-top:96px;animation:lsfade .25s ease">
     <h2 style="margin:0 0 12px;font-size:34px;font-weight:700">Nothing flagged today</h2>
-    <div style="font-size:15.5px;line-height:1.6;color:${MUT(60)};max-width:56ch;text-wrap:pretty">No lead under your team has gone silent past its threshold, so there is no root-cause analysis to do. The queue refreshes with each morning's export.</div>
-    <div style="font-size:13px;line-height:1.6;color:${MUT(45)};max-width:56ch;padding-top:22px;text-wrap:pretty">Expecting leads here? An empty queue can also mean today’s export hasn’t landed, or that the queue’s LRM addresses don’t match the mapping sheet. <a href="/api/debug" target="_blank">Run the diagnostic</a> — it names which of the two it is.</div></div>`;
+    <div style="font-size:15.5px;line-height:1.6;color:${MUT(60)};max-width:56ch;text-wrap:pretty">No lead under your team has gone silent past its threshold — or today’s export hasn’t reached the sheet yet. The check below says which.</div>
+    ${diagBlock()}</div>`;
 
   const rail=CATS.map(c=>{const dl=catLeads(c.key),d=dl.filter(l=>rcaDone(l.id)).length,on=c.key===S.catKey;
     return `<button data-act="cat" data-v="${c.key}" style="display:block;width:100%;text-align:left;background:none;border:none;padding:9px 0;cursor:pointer;font-family:inherit">
@@ -799,7 +843,7 @@ function mgrView(){
   const head=`<tr><th style="${th};text-align:left;padding-left:0">Team lead</th><th style="${th};text-align:left">Cluster</th><th style="${th};text-align:right">To audit</th><th style="${th};text-align:right">Done</th><th style="${th};text-align:right">Open</th>${CATS.map(c=>`<th style="${th};text-align:right">${esc(c.short||c.name)}</th>`).join('')}</tr>`;
   const tdf=`padding:11px 10px;border-bottom:1px solid var(--color-divider);font-variant-numeric:tabular-nums;text-align:right`;
   const foot=`<tr><td style="${tdf};text-align:left;padding-left:0;font-weight:700;border-bottom:none;border-top:1px solid var(--color-text)">All teams</td><td style="${tdf};border-bottom:none;border-top:1px solid var(--color-text)"></td><td style="${tdf};font-weight:700;border-bottom:none;border-top:1px solid var(--color-text)">${totAll}</td><td style="${tdf};font-weight:700;border-bottom:none;border-top:1px solid var(--color-text)">${doneAll}</td><td style="${tdf};font-weight:700;border-bottom:none;border-top:1px solid var(--color-text)">${totAll-doneAll}</td>${catTot.map(n=>`<td style="${tdf};font-weight:700;border-bottom:none;border-top:1px solid var(--color-text)">${n||''}</td>`).join('')}</tr>`;
-  if(!tls.length)return `<div class="wrap" style="padding-top:96px"><h2 style="margin:0 0 12px;font-size:34px;font-weight:700">No teams in today’s queue</h2><div style="font-size:15.5px;line-height:1.6;color:${MUT(60)};max-width:56ch;text-wrap:pretty">Today’s export contains no flagged leads, so there is nothing to distribute across teams yet.</div></div>`;
+  if(!tls.length)return `<div class="wrap" style="padding-top:96px"><h2 style="margin:0 0 12px;font-size:34px;font-weight:700">No teams in today’s queue</h2><div style="font-size:15.5px;line-height:1.6;color:${MUT(60)};max-width:56ch;text-wrap:pretty">Nothing has been distributed across teams yet — either today’s export is empty, or its leads aren’t matching the mapping sheet.</div>${diagBlock()}</div>`;
   return `<div class="wrap" style="padding-bottom:80px;animation:lsfade .25s ease">
     <div style="padding:32px 0 30px">
       <h2 style="margin:0;font-size:34px;font-weight:700;letter-spacing:-.015em">Team progress</h2>
@@ -816,6 +860,7 @@ function patchRv(id,o){S.rcaReview[id]=Object.assign({verdict:null,note:'',assig
 document.addEventListener('click',e=>{
   const t=e.target.closest('[data-act]');if(!t)return;const act=t.dataset.act,v=t.dataset.v;
   if(act==='nav'){S.screen=v;render();}
+  else if(act==='diag'){loadDiag();}
   else if(act==='signout'){signOut();}
   else if(act==='rules'){S.showRules=!S.showRules;render();}
   else if(act==='cat'){S.catKey=v;S.selId=(catLeads(v)[0]||{}).id;render();}
