@@ -95,7 +95,7 @@ function scopeForUser(full, user) {
     auditDate: full.auditDate,
     source: full.source,
     resolvedByName: full.resolvedByName || 0,
-    unresolved: full.unresolved || 0,
+    excludedUnmapped: full.excludedUnmapped || 0,
     user, role, meEmail,
     queue: inScope,
     hierarchy: hierScope,
@@ -166,20 +166,6 @@ async function getData() {
     const latest = dates[dates.length - 1];
     const todayOnly = latest ? queue.filter(r => String(r.audit_date || '').slice(0, 10) === latest) : queue;
 
-    // ---- payload guard ----
-    // keep the top N candidates per (LRM, category) so every TL has enough to fill its
-    // 4-per-category picks and backfill; the real cap is applied in the front-end
-    const PER = Number(process.env.PER_LRM_CATEGORY || 12);
-    const seen = {};
-    const trimmed = todayOnly
-      .slice()
-      .sort((a, b) => (b.priority_key - a.priority_key) || (b.days_overdue - a.days_overdue))
-      .filter(r => {
-        const k = r.lrm_email + '|' + r.category;
-        seen[k] = (seen[k] || 0) + 1;
-        return seen[k] <= PER;
-      });
-
     // ---- hierarchy: the mapping sheet ----
     const mRaw = await readSheet(MAP_TAB).catch(() => []);
     const hierarchy = toObjects(mRaw).map(r => ({
@@ -196,25 +182,48 @@ async function getData() {
       hr_status:  pick(r, ['HR Status', 'Status', 'hr_status']) || 'Active',
     })).filter(h => h.lrm_email && h.hr_status.toLowerCase() !== 'inactive');
 
-    // ---- name fallback ----
-    // The Metabase card can emit a blank lrm_email (its users join misses, or that
-    // account's `emails` is empty). A row with no email joins to nothing and becomes
-    // invisible to every TL — the queue silently shrinks to zero, which is exactly what
-    // /api/debug caught. When the email is missing but the name is present, resolve it
-    // against the mapping sheet by name so the lead still reaches its TL. Counted in
-    // `resolvedByName` so this can never quietly paper over a broken card.
+    // ---- name fallback (before scoping, so a nameable row still finds its TL) ----
+    // The card can emit a blank lrm_email when an LRM's users record has no address.
+    // If the name matches the mapping sheet, use that; otherwise the row is dropped
+    // below with the rest of the unmapped.
     const byName = {};
-    hierarchy.forEach(h => { const k = nameKey(h.lrm_name); if (k && !byName[k]) byName[k] = h.lrm_email; });
-    let resolvedByName = 0, unresolved = 0;
-    trimmed.forEach(r => {
+    hierarchy.forEach(x => { const k = nameKey(x.lrm_name); if (k && !byName[k]) byName[k] = x.lrm_email; });
+    let resolvedByName = 0;
+    todayOnly.forEach(r => {
       if (r.lrm_email) return;
       const hit = byName[nameKey(r.lrm_name)];
       if (hit) { r.lrm_email = hit; r.lrm_email_source = 'name'; resolvedByName++; }
-      else unresolved++;
     });
 
+    // ---- scope to the mapped org ----
+    // An LRM who isn't in the mapping sheet has no TL, so nobody can review their leads.
+    // Carrying those rows anyway only produces confusion, so they are dropped here and
+    // reported as a count. This is by design, not a failure: the mapping sheet defines
+    // who this tool covers.
+    const mapped = new Set(hierarchy.map(x => x.lrm_email));
+    const inOrg = todayOnly.filter(r => r.lrm_email && mapped.has(r.lrm_email));
+    const excludedUnmapped = todayOnly.length - inOrg.length;
+    const excludedLrms = [...new Set(todayOnly
+      .filter(r => !r.lrm_email || !mapped.has(r.lrm_email))
+      .map(r => r.lrm_email || ('(no email) ' + (r.lrm_name || '?'))))];
+
+    // ---- payload guard ----
+    // keep the top N candidates per (LRM, category) so every TL has enough to fill its
+    // 4-per-category picks and backfill; the real cap is applied in the front-end
+    const PER = Number(process.env.PER_LRM_CATEGORY || 12);
+    const seen = {};
+    const trimmed = inOrg
+      .slice()
+      .sort((a, b) => (b.priority_key - a.priority_key) || (b.days_overdue - a.days_overdue))
+      .filter(r => {
+        const k = r.lrm_email + '|' + r.category;
+        seen[k] = (seen[k] || 0) + 1;
+        return seen[k] <= PER;
+      });
+
     const auditDate = (trimmed[0] && trimmed[0].audit_date) || new Date().toISOString().slice(0, 10);
-    CACHE = { auditDate, source, queue: trimmed, hierarchy, resolvedByName, unresolved };
+    CACHE = { auditDate, source, queue: trimmed, hierarchy,
+              resolvedByName, excludedUnmapped, excludedLrms };
     CACHE_AT = Date.now();
     return CACHE;
 }

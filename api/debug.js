@@ -89,7 +89,6 @@ module.exports = async (req, res) => {
     const matched = [...qEmails].filter(e => hEmails.has(e));
     const orphanQ = [...qEmails].filter(e => !hEmails.has(e));
     const blankLrm = q.filter(r => !norm(r.lrm_email)).length;
-    const byNameRows = q.filter(r => r.lrm_email_source === 'name').length;
     const qNames = [...new Set(q.map(r => String(r.lrm_name || '').trim()).filter(Boolean))];
 
     const byCat = {};
@@ -106,33 +105,47 @@ module.exports = async (req, res) => {
       distinctLrmInQueue: qEmails.size,
       distinctLrmInMap: hEmails.size,
       lrmMatchedBoth: matched.length,
+      // The queue is scoped to the mapping sheet before it leaves the API, so unmapped
+      // LRMs never reach a TL's screen. Reported here so the exclusion stays visible.
+      excludedRowsUnmappedLrm: full.excludedUnmapped || 0,
+      excludedLrmCount: (full.excludedLrms || []).length,
+      sampleExcludedLrms: (full.excludedLrms || []).slice(0, 12),
+      queueRowsResolvedByName: full.resolvedByName || 0,
       queueRowsWithBlankLrmEmail: blankLrm,
-      queueRowsResolvedByName: byNameRows,
       distinctLrmNamesInQueue: qNames.length,
       sampleQueueLrmNames: qNames.slice(0, 8),
       distinctTlInMap: tlEmails.size,
       sampleQueueLrmEmails: [...qEmails].slice(0, 8),
       sampleMapLrmEmails: [...hEmails].slice(0, 8),
       sampleTlEmails: [...tlEmails].slice(0, 8),
+      // should be empty now that scoping happens in the API; a non-empty list means a row
+      // slipped past the mapped-org filter
       sampleUnmatchedQueueLrmEmails: orphanQ.slice(0, 12),
     };
 
     // Plain-language verdict, in the order the pipeline can fail.
+    // Thresholds are PROPORTIONAL: a handful of blank-email rows in a 12,000-row pull is
+    // a data-quality nit, not the total failure an absolute check would scream about.
+    const pctBlank = q.length ? blankLrm / q.length : 0;
+    const excluded = full.excludedUnmapped || 0;
+    const exclLrms = (full.excludedLrms || []).length;
     let verdict;
     if (!q.length) {
-      verdict = out.reads[QUEUE_TAB] && out.reads[QUEUE_TAB].rowCount > 1
-        ? 'ROWS EXIST IN THE SHEET BUT NONE SURVIVED PARSING — every row is missing lead_id or category. Check that the Audit_Queue header row matches the v5 column names exactly.'
-        : 'NO ROWS AT SOURCE — the Metabase card and the ' + QUEUE_TAB + ' tab both came back empty. Run audit_queue_daily_v5.sql and paste the export in, or check METABASE_CARD.';
+      verdict = excluded
+        ? 'EVERY ROW WAS EXCLUDED — the card returned rows, but not one of their LRMs is in ' + MAP_TAB + ', so there is nobody to review them. Check that the mapping sheet\'s LRM Email column uses the same address form as the query (see sampleExcludedLrms).'
+        : (out.reads[QUEUE_TAB] && out.reads[QUEUE_TAB].rowCount > 1
+          ? 'ROWS EXIST IN THE SHEET BUT NONE SURVIVED PARSING — every row is missing lead_id or category. Check that the Audit_Queue header row matches the v5 column names exactly.'
+          : 'NO ROWS AT SOURCE — the Metabase card and the ' + QUEUE_TAB + ' tab both came back empty. Run audit_queue_daily_v5.sql, or check METABASE_CARD.');
     } else if (!H.length) {
       verdict = 'QUEUE HAS ROWS BUT THE MAPPING IS EMPTY — ' + MAP_TAB + ' read no usable rows, so no LRM has a TL and every scoped view is empty. Check the tab name and its header row.';
-    } else if (blankLrm && !byNameRows) {
-      verdict = 'THE CARD IS NOT EMITTING lrm_email — all ' + blankLrm + ' queue rows have a blank LRM address, and their lrm_name does not match the mapping sheet either, so nothing can be assigned to a TL. Metabase card ' + (process.env.METABASE_CARD || '4447') + ' is running an OLD query: update it to audit_queue_daily_v5.sql, whose users join emits lrm_email. Compare sampleQueueLrmNames with the mapping sheet\'s LRM Name column.';
-    } else if (byNameRows) {
-      verdict = 'WORKING, BUT ON THE FALLBACK — ' + byNameRows + ' rows had no lrm_email and were matched to a TL by NAME instead. That is fragile (any spelling difference drops the lead). Fix it properly by updating Metabase card ' + (process.env.METABASE_CARD || '4447') + ' to audit_queue_daily_v5.sql.';
+    } else if (pctBlank > 0.9) {
+      verdict = 'THE CARD IS NOT EMITTING lrm_email — ' + blankLrm + ' of ' + q.length + ' rows have a blank LRM address. Metabase card ' + (process.env.METABASE_CARD || '4447') + ' is running an OLD query: update it to audit_queue_daily_v5.sql.';
     } else if (!matched.length) {
-      verdict = 'JOIN FAILURE — ' + q.length + ' queue rows and ' + H.length + ' mapping rows, but NOT ONE lrm_email matches. Compare sampleQueueLrmEmails with sampleMapLrmEmails: usually the query emits a different address form than the mapping sheet.';
+      verdict = 'JOIN FAILURE — ' + q.length + ' queue rows and ' + H.length + ' mapping rows, but NOT ONE lrm_email matches. Compare sampleQueueLrmEmails with sampleMapLrmEmails.';
     } else {
-      verdict = 'HEALTHY — ' + q.length + ' rows across ' + matched.length + ' LRMs, all joined to a TL. If a specific person still sees nothing, their signed-in address is not in the TL / ZSM / ADOS columns; compare it against sampleTlEmails.';
+      verdict = 'HEALTHY — ' + q.length + ' rows across ' + matched.length + ' mapped LRMs, all joined to a TL.'
+        + (excluded ? ' ' + excluded + ' rows from ' + exclLrms + ' LRMs outside ' + MAP_TAB + ' were excluded by design — no TL owns them, so showing them would only confuse.' : '')
+        + ' If a specific person still sees nothing, their signed-in address is not in the TL / ZSM / ADOS columns; compare it against sampleTlEmails.';
     }
     out.verdict = verdict;
   } catch (e) {
