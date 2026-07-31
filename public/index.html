@@ -204,13 +204,24 @@ function loginView(denied,reason){
   renderGoogleBtn(document.getElementById('gbtn'));
 }
 
-function errorView(){
+function errorView(why){
+  const w=why||{};
+  const diag={
+    no_server:['No API on this host','<code>/api/queue</code> returned 404. Serverless routes only run on the deployed Vercel app — this is expected in a local preview.'],
+    empty:['Queue is empty','The API answered, but returned no rows. Run <code>audit_queue_daily_v3.sql</code> and paste today\u2019s export into the <b>Audit_Queue</b> sheet.'],
+    http:['API error '+(w.status||''),esc(w.detail||'The queue endpoint returned an error. Check the Vercel function logs.')],
+    net:['Could not reach the API',esc(w.detail||'The request failed or timed out.')]
+  }[w.kind||'net'];
   document.getElementById('app').innerHTML=`<div style="min-height:100vh;display:grid;place-items:center;padding:40px 24px">
-    <div style="max-width:460px;text-align:center;display:flex;flex-direction:column;align-items:center">
+    <div style="max-width:520px;text-align:center;display:flex;flex-direction:column;align-items:center">
       <div style="margin-bottom:28px">${logoImg(34)}</div>
-      <div style="font-family:var(--font-heading);font-size:26px;margin-bottom:12px">No queue available</div>
-      <div style="font-size:14.5px;line-height:1.6;color:${MUT(62)};max-width:40ch">The audit queue could not be loaded. Check that today's export has been written to the <b>Audit_Queue</b> sheet, then reload.</div>
-      <button class="btn btn-secondary" onclick="location.reload()" style="font-size:13px;margin-top:24px">Reload</button>
+      <div style="font-family:var(--font-heading);font-size:26px;margin-bottom:12px">${esc(diag[0])}</div>
+      <div style="font-size:14.5px;line-height:1.6;color:${MUT(62)};max-width:46ch">${diag[1]}</div>
+      <div style="font-size:12.5px;color:${MUT(45)};line-height:1.6;margin-top:16px;max-width:46ch">This is not a permissions problem — your sign-in worked. Admin access is checked after the queue loads.</div>
+      <div style="display:flex;gap:10px;margin-top:24px">
+        <button class="btn btn-secondary" onclick="location.reload()" style="font-size:13px">Reload</button>
+        <button class="btn btn-ghost" onclick="signOut()" style="font-size:13px">Sign out</button>
+      </div>
     </div></div>`;
 }
 function fetchT(url,ms,headers){const c=new AbortController();const t=setTimeout(()=>c.abort(),ms||3500);return fetch(url,{signal:c.signal,headers:headers||{}}).finally(()=>clearTimeout(t));}
@@ -219,19 +230,23 @@ async function load(){
   const sess=readSession();
   if(AUTH.enabled&&!sess){return loginView(false);}
   document.getElementById('app').innerHTML='<div class="wrap" style="padding-top:80px;text-align:center;color:'+MUT(55)+';font-size:14px">Loading Lead Sentinel…</div>';
-  let data=null;
+  let data=null,fail={kind:'net'};
   try{const r=await fetchT('/api/queue',20000,authHeaders());
     if(r.status===401||r.status===403){let reason='';try{reason=(await r.json()).error||'';}catch(e){}return loginView(true,reason);}
-    if(r.ok){const j=await r.json();
-      if(AUTH.enabled){data=j;S.src='live';}                 // gated → server response is authoritative
-      else if(j&&j.queue&&j.queue.length){data=j;S.src='live';}
+    if(r.status===404){fail={kind:'no_server'};}
+    else if(!r.ok){let d='';try{d=(await r.json()).error||'';}catch(e){}fail={kind:'http',status:r.status,detail:d};}
+    else{const j=await r.json();
+      // An empty queue is a normal day, not a failure — load the app and show an empty state.
+      // Only a missing or erroring API blocks entry.
+      if(j&&Array.isArray(j.queue)){data=j;S.src='live';}
+      else fail={kind:'empty'};
     }
-  }catch(e){}
-  if(!data){return errorView();}
+  }catch(e){fail={kind:'net',detail:String(e&&e.message||e)};}
+  if(!data){return errorView(fail);}
   S.role=data.role||'tl';
   S.user=data.user||sess||null;
   S.meEmail=data.meEmail||null;
-  buildModel(data.queue,data.hierarchy);
+  buildModel(data.queue||[],data.hierarchy||[]);
   if(S.role==='zsm'||S.role==='ados'||S.role==='admin')S.screen='mgr';
   render();
 }
@@ -276,13 +291,14 @@ function buildModel(queue,hier){
   });
   const busiest=Object.keys(leadsByTl).sort((a,b)=>leadsByTl[b].length-leadsByTl[a].length)[0];
   const meTl=(S.meEmail&&leadsByTl[S.meEmail])?S.meEmail:null;
-  const curTl=meTl||busiest;
+  const curTl=meTl||busiest||null;
   const tls=Object.keys(leadsByTl).map((tl,i)=>{const ls=leadsByTl[tl],m=tlMeta[tl],od=ls.filter(l=>l.days>2).length;
     return{email:tl,name:m.name,ini:m.ini,cluster:m.cluster,total:ls.length,me:tl===meTl,
       simAudited:tl===curTl?null:Math.max(0,ls.length-(i%3)),simDev:tl===curTl?null:od,simHigh:tl===curTl?null:Math.round(od/2),topGap:topCat(ls)};});
   S.model={leadsByTl,lrmsByTl,lrmRiskByTl,tls,curTl};S.tlEmail=curTl;S.hier=hier||[];
-  const first=(leadsByTl[curTl].filter(l=>l.cat==='mcch_past').sort((a,b)=>b.urg-a.urg)[0]||leadsByTl[curTl][0]||{});
-  S.selId=first.id;
+  const mine=(curTl&&leadsByTl[curTl])||[];
+  const first=(mine.filter(l=>l.cat==='mcch_past').sort((a,b)=>b.urg-a.urg)[0]||mine[0]||{});
+  S.selId=first.id||null;
 }
 function topCat(ls){const c={};ls.forEach(l=>c[l.cat]=(c[l.cat]||0)+1);const t=Object.keys(c).sort((a,b)=>c[b]-c[a])[0];return t?catObj(t).name:'—';}
 function buildTL(row){const t=[],p=(iso,w,k)=>t.push({when:fmtD(iso),what:w,kind:k});
@@ -320,33 +336,51 @@ function tierStyle(t,big){const c=t==='P1'?'background:var(--color-accent);color
 function cutoffLeft(){const now=new Date();const cut=new Date(now);cut.setHours(19,0,0,0);if(now>=cut)cut.setDate(cut.getDate()+1);let s=Math.max(0,Math.floor((cut-now)/1000));const p=n=>String(n).padStart(2,'0');return p(Math.floor(s/3600))+':'+p(Math.floor(s%3600/60))+':'+p(s%60);}
 function tickTimers(){const t=cutoffLeft();document.querySelectorAll('[data-timer]').forEach(el=>{el.textContent=t;});}
 const MUT=p=>'color-mix(in srgb,var(--color-text) '+p+'%,transparent)';
+// ---- role scoping ----
+// The queue is work TLs do. Everyone above them (ZSM, ADOS, RCA auditors, admin) sees what
+// the teams did with it, never a queue of their own.
+const isTL=()=>S.role==='tl';
+function isAud(){ensureAuditors();const me=norm((S.user&&S.user.email)||S.meEmail||'');return S.role==='admin'||(!!me&&S.rcaAuditors.map(norm).includes(me));}
+function screensFor(){
+  const out=[];
+  if(isTL()){out.push(['queue','Audit queue'],['adher','My adherence']);}
+  if(isAud())out.push(['rca','RCA audit']);
+  out.push(['mgr',isTL()?'Team view':'Team progress']);
+  if(S.role==='admin')out.push(['settings','Settings']);
+  return out;
+}
 function render(){
   const el=document.getElementById('app');
-  const scr=(S.screen==='settings'&&S.role!=='admin')?'queue':S.screen;
+  const allow=screensFor().map(s=>s[0]);
+  const scr=allow.includes(S.screen)?S.screen:allow[0];
+  S.screen=scr;
   el.innerHTML=nav()+(scr==='queue'?queueView():scr==='adher'?adherView():scr==='rca'?rcaView():scr==='settings'?settingsView():mgrView());
 }
 function nav(){
   const meTl=TLS().find(t=>t.me);
-  const showSettings=(S.role==='admin');
   const uName=(S.user&&(S.user.name||S.user.email))||(meTl&&meTl.name)||'—';
   const uPic=S.user&&S.user.picture;
   const roleLbl=ROLE_LABEL[S.role]||'Team Lead';
   const sub=roleLbl+(meTl&&meTl.cluster?' · '+meTl.cluster:'');
   const uIni=ini2(uName);
   const seg=(id,lbl)=>`<label class="seg-opt" style="${S.screen===id?'background:var(--color-accent);color:var(--color-bg)':''}"><input type="radio" style="position:absolute;opacity:0" ${S.screen===id?'checked':''} data-act="nav" data-v="${id}">${lbl}</label>`;
+  const tabs=screensFor().map(s=>seg(s[0],s[1])).join('');
   return `<nav class="wrap" style="display:flex;align-items:center;gap:18px;padding-top:18px;padding-bottom:10px">
     <span class="nav-brand" style="display:flex;align-items:center;gap:11px;margin-right:0">
       ${logoImg(22)}
       <span style="width:1px;height:20px;background:var(--color-divider)"></span>
       <span style="width:28px;height:28px;border-radius:999px;background:var(--color-accent);display:grid;place-items:center"><span style="width:11px;height:11px;border-radius:999px;border:2.6px solid var(--color-bg)"></span></span>Lead Sentinel</span>
-    <div class="seg" style="margin-left:6px">${seg('queue','Audit queue')}${seg('adher','My adherence')}${seg('rca','RCA audit')}${seg('mgr','Manager view')}${showSettings?seg('settings','Settings'):''}</div>
+    <div class="seg" style="margin-left:6px">${tabs}</div>
     <span style="flex:1"></span>
-    <span style="display:flex;align-items:center;gap:8px;padding:6px 14px;border-radius:999px;background:var(--color-surface);border:1px solid var(--color-divider)"><span style="width:8px;height:8px;border-radius:999px;background:var(--color-accent)"></span><span style="font-size:12.5px;font-weight:600;color:var(--color-accent-800)">Cutoff 7:00 PM · <span data-timer style="font-variant-numeric:tabular-nums">${cutoffLeft()}</span> left</span></span>
+    ${isTL()?`<span style="display:flex;align-items:center;gap:8px;padding:6px 14px;border-radius:999px;background:var(--color-surface);border:1px solid var(--color-divider)"><span style="width:8px;height:8px;border-radius:999px;background:var(--color-accent)"></span><span style="font-size:12.5px;font-weight:600;color:var(--color-accent-800)">Cutoff 7:00 PM · <span data-timer style="font-variant-numeric:tabular-nums">${cutoffLeft()}</span> left</span></span>`:''}
     <span style="display:flex;align-items:center;gap:10px"><span style="display:flex;flex-direction:column;text-align:right;line-height:1.25"><span style="font-size:13px;font-weight:600">${esc(uName)}</span><span style="font-size:11px;color:${MUT(55)}">${esc(sub)}</span></span>${uPic?`<img src="${esc(uPic)}" alt="" style="width:38px;height:38px;border-radius:999px;object-fit:cover">`:`<span style="width:38px;height:38px;display:grid;place-items:center;border-radius:999px;background:var(--color-accent-200);color:var(--color-accent-800);font-weight:700;font-size:13px">${esc(uIni)}</span>`}${AUTH.enabled?`<button class="btn btn-ghost" data-act="signout" title="Sign out" style="padding:8px 10px;font-size:12px">Sign out</button>`:''}</span>
   </nav>`;
 }
 function queueView(){
   const total=L().length,done=audited(),pct=total?Math.round(done/total*100):0;
+  if(!total)return `<div class="wrap" style="padding:80px 0;animation:lsfade .25s ease">
+    <div style="max-width:52ch"><h2 style="margin:0 0 10px;font-size:30px">Nothing flagged today</h2>
+    <div style="font-size:14.5px;line-height:1.6;color:${MUT(62)}">No lead under your team has gone silent past its threshold, so there is no root-cause analysis to do. The queue refreshes with each morning's export.</div></div></div>`;
   const tabs=CATS.map(c=>{const dl=catLeads(c.key),d=dl.filter(l=>rcaDone(l.id)).length,on=c.key===S.catKey;
     return `<button class="btn" data-act="cat" data-v="${c.key}" style="padding:8px 14px;font-size:13px;${on?'background:var(--color-surface);border:1.5px solid var(--color-accent)':'background:transparent;border:1px solid var(--color-divider);color:'+MUT(78)}"><span style="width:10px;height:10px;border-radius:999px;background:${c.dot}"></span>${esc(c.name)}<span style="font-size:11px;font-weight:600;padding:1px 8px;border-radius:999px;background:${on?'var(--color-accent-200)':MUT(8)};color:${on?'var(--color-accent-800)':MUT(60)}">${d}/${dl.length}</span></button>`;}).join('');
   const dl=catLeads(S.catKey);
