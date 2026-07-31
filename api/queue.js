@@ -1,7 +1,7 @@
 // api/queue.js  ->  GET /api/queue
 //
 // Two feeds, joined on lrm_email:
-//   1. Metabase Q4447   — the daily audit queue (audit_queue_daily_v2.sql), pulled
+//   1. Metabase Q4447   — the daily audit queue (audit_queue_daily_v4.sql), pulled
 //                          live over the Metabase REST API. The query does the
 //                          categorising and per-category ranking. It emits NO TL columns
 //                          and applies NO cap — the 4-per-category / 20-per-TL cap is
@@ -134,7 +134,7 @@ async function getData() {
       status_changed_at:     r.status_changed_at || null,
       order_closed_at:       r.order_closed_at || null,
       attempt_today:         r.attempt_today === true || String(r.attempt_today).toLowerCase() === 'true',
-      // v3 — activity-driven detection
+      // v4 — activity-driven detection
       last_activity_at:      r.last_activity_at || null,
       last_activity_type:    r.last_activity_type || '',
       days_silent:           num(r.days_silent),
@@ -142,6 +142,7 @@ async function getData() {
       calls_30d:             num(r.calls_30d),
       connects_30d:          num(r.connects_30d),
       leak_code:             r.leak_code || '',
+      crm_touch_at:          r.crm_touch_at || null,
       loop_turns:            num(r.loop_turns),
       mcch_events:           num(r.mcch_events),
       dev_events:            num(r.dev_events),
@@ -151,12 +152,20 @@ async function getData() {
       category_rank:         num(r.lrm_category_rank || r.category_rank),
     })).filter(r => r.lead_id && r.category);
 
+    // ---- today only ----
+    // The Apps Script job appends every day to Audit_Queue_Log and refreshes the
+    // Audit_Queue tab, but if the app is ever pointed at the append-only log it must
+    // not stack weeks of history into one queue. Keep the newest audit_date present.
+    const dates = [...new Set(queue.map(r => String(r.audit_date || '').slice(0, 10)).filter(Boolean))].sort();
+    const latest = dates[dates.length - 1];
+    const todayOnly = latest ? queue.filter(r => String(r.audit_date || '').slice(0, 10) === latest) : queue;
+
     // ---- payload guard ----
     // keep the top N candidates per (LRM, category) so every TL has enough to fill its
     // 4-per-category picks and backfill; the real cap is applied in the front-end
     const PER = Number(process.env.PER_LRM_CATEGORY || 12);
     const seen = {};
-    const trimmed = queue
+    const trimmed = todayOnly
       .slice()
       .sort((a, b) => (b.priority_key - a.priority_key) || (b.days_overdue - a.days_overdue))
       .filter(r => {
@@ -191,3 +200,5 @@ async function getData() {
 // harmless on Hobby, which caps at 10s regardless). Set AFTER the handler assignment
 // so it isn't clobbered by `module.exports = handler`.
 module.exports.config = { maxDuration: 60 };
+// /api/debug reuses the exact same pull, so a diagnosis can never disagree with the app.
+module.exports.getData = getData;
