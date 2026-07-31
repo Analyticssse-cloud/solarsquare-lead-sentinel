@@ -6,8 +6,19 @@ The tool reads **two tabs** from the Google Sheet and merges them on `lrm_email`
 
 | Tab | What it is | Who fills it |
 |-----|------------|--------------|
-| `Audit_Queue` | Daily output of `audit_queue_daily_v4.sql` (one row per sampled lead) | Apps Script / Metabase export, once a day — read only |
+| `Audit_Queue` | **Today's** queue — header + today's rows, replaced on each run | `apps-script/AuditQueueDaily.gs` — this is what the app reads |
+| `Audit_Queue_Log` | **Append-only history** — every day's export, forever (`exported_at` + all v4 columns) | same job, appended; never overwritten |
 | `LRM_TL_MAP`  | LRM → TL / ZSM / ADOS mapping (dynamic) | maintained for the QA / LRM dashboards — **read only, never written to** |
+
+The daily job is `apps-script/AuditQueueDaily.gs` — same pattern as the IVR master sheet:
+log in to Metabase, run the saved card (`audit_queue_daily_v4.sql`), append to
+`Audit_Queue_Log`, and refresh `Audit_Queue`. It is idempotent — a second run on the same
+`audit_date` exits without writing (use `deleteToday()` to force a re-export) — and it trims
+the log past `KEEP_DAYS` (120). Set the Metabase credentials as Script Properties and add a
+daily 6–7 AM IST trigger; setup notes are in the file header.
+
+The API also guards this: if it is ever pointed at the append-only log, it keeps only the
+**newest `audit_date`** present, so history can never stack into one day's queue.
 
 Both live on the spreadsheet at `SHEET_ID`. A **separate** spreadsheet (`RCA_SHEET_ID`) holds
 the app's own write-side log:
@@ -16,7 +27,23 @@ the app's own write-side log:
 |---|---|---|
 | `RCA_Log` | Every completed RCA, appended | the app, via `/api/rca` — tab created automatically |
 
-`Audit_Queue` header row must match the SQL column names: `audit_date, lrm_id, lrm_name, lrm_email, lead_id, customer_name, cluster, lead_stage, lead_status, category, leak_code, priority_key, lrm_category_rank, created_at, meeting_confirmed_at, meeting_schedule_date, meeting_done_date, follow_up_at, qualified_at, status_changed_at, attempt_today, last_activity_at, last_activity_type, days_silent, hours_silent, calls_30d, connects_30d, loop_turns, mcch_events, dev_events, days_overdue`.
+`Audit_Queue` header row must match the SQL column names: `audit_date, lrm_id, lrm_name, lrm_email, lead_id, customer_name, cluster, lead_stage, lead_status, category, leak_code, priority_key, lrm_category_rank, created_at, meeting_confirmed_at, meeting_schedule_date, meeting_done_date, follow_up_at, qualified_at, status_changed_at, attempt_today, last_activity_at, last_activity_type, days_silent, hours_silent, crm_touch_at, calls_30d, connects_30d, loop_turns, mcch_events, dev_events, days_overdue`.
+
+### Two open column names
+
+v4 runs, but two filters are scaffolded off because this schema dump doesn't pin their
+column names — see the lines marked `(A)` and `(D)` in the query, and run
+`probe_columns.sql` to resolve them:
+
+- **(A) Manual-only call filter.** Without it `calls_30d` counts Progressive / IVR /
+  Inbound traffic too, so an LRM looks more diligent than they were.
+- **(D) Agent scoping.** Dials are matched on the customer's phone number, so a bot or
+  another agent calling that number counts as the assigned LRM having called. This is the
+  bigger of the two — it can make a completely untouched lead look worked, which is
+  exactly the failure this tool exists to catch.
+
+Both only ever make the tool *under*-report leaks, never over-report. Dial counts are
+already scoped to `>= lrm_assigned_at`, so a previous owner's calls can't leak in.
 
 ---
 
@@ -90,7 +117,7 @@ The queue is work **TLs** do. Everyone above them sees what the teams did with i
 
 | Role | Tabs |
 |---|---|
-| Team Lead | Audit queue · My adherence · Team view |
+| Team Lead | Audit queue · My adherence |
 | RCA auditor (`RCA_AUDITOR_EMAILS` / Settings) | RCA audit · Team progress |
 | ZSM / ADOS | Team progress |
 | Admin | RCA audit · Team progress · Settings |
@@ -160,6 +187,7 @@ api/
   _metabase.js   Metabase REST helper (not a route)
   _auth.js       Google token verification (not a route)
   queue.js       GET  /api/queue
+  debug.js       GET  /api/debug         (why is the queue empty? — reads the same pull)
   rca.js         GET/POST /api/rca      (the shared RCA log — read + append)
   recording.js   POST /api/recording    (Vercel Blob storage, optional)
   config.js      GET  /api/config
