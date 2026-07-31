@@ -148,7 +148,7 @@ const LEAKLBL={L1:'Meeting date passed, nothing since',L2:'Marked CNC, never re-
 const silentLbl=l=>{if(l.lastAt==null)return'never touched';const h=l.hoursSilent||0;if(h<24)return h<=1?'active this hour':h+'h silent';return (l.silent||Math.round(h/24))+'d silent';};
 const catObj=k=>CATS.find(c=>c.key===k);
 
-const S={screen:'queue',recs:{},recBusy:null,trans:{},transBusy:null,transErr:null,txCopied:null,txProg:null,tlEmail:null,catKey:'mcch_past',selId:null,audits:{},rcaReview:{},showRules:false,model:null,src:'demo',role:'demo',user:null,meEmail:null,hier:[],rcaAuditors:null,newAuditor:'',dirQ:''};
+const S={screen:'queue',recs:{},recBusy:null,trans:{},transBusy:null,transErr:null,txCopied:null,txProg:null,txStart:0,txTick:null,tlEmail:null,catKey:'mcch_past',selId:null,audits:{},rcaReview:{},showRules:false,model:null,src:'demo',role:'demo',user:null,meEmail:null,hier:[],rcaAuditors:null,newAuditor:'',dirQ:''};
 
 const AUTH={enabled:true,ready:false,clientId:'',domain:'solarsquare.in',admins:[]};
 const LOGO_SRC='https://cdn.solarsquare.in/blog/wp-content/uploads/2025/11/05101757/logo.webp';
@@ -471,9 +471,10 @@ function txWorker(){
   TXW=new Worker('whisper-worker.js',{type:'module'});
   TXW.onmessage=e=>{
     const m=e.data||{};
-    if(m.type==='progress'){S.txProg={phase:m.phase,pct:m.pct||0,file:m.file||''};render();return;}
+    if(m.type==='progress'){S.txProg={phase:m.phase,pct:m.pct||0,file:m.file||''};txPaint();return;}
     if(m.type==='done'){
-      const t={text:m.text,lang:txLang()||'auto',model:(m.model||'').split('/').pop()+' · on-device'+(m.device==='webgpu'?' (GPU)':''),dur:null,at:new Date().toISOString(),chunks:m.chunks};
+      const speed=m.secs&&S.txStart?(m.secs/((Date.now()-S.txStart)/1000)):0;
+      const t={text:m.text,lang:txLang()||'auto',model:(m.model||'').split('/').pop()+' · '+(m.device==='webgpu'?'on-device GPU':'on-device CPU')+(speed?' · '+speed.toFixed(1)+'× real time':''),dur:m.secs||null,at:new Date().toISOString(),chunks:m.chunks};
       if(!m.text){S.transErr={id:m.id,msg:'No speech detected. Check the recording actually has audio.'};}
       else{S.trans[m.id]=t;idbGet(m.id).then(st=>idbPut(m.id,Object.assign({},st||{},{transcript:t}))).catch(()=>{});}
       S.transBusy=null;S.txProg=null;render();return;
@@ -484,8 +485,21 @@ function txWorker(){
   return TXW;
 }
 
+const TXPHASE={decode:'Reading the audio',download:'Downloading the model — first run only',load:'Starting the engine',transcribe:'Transcribing'};
+// Patch the progress line in place. A full render() on every worker message is what made
+// the screen flicker — progress arrives dozens of times a second.
+function txPaint(){
+  const pr=S.txProg||{},lbl=document.getElementById('txlbl'),bar=document.getElementById('txbar');
+  if(!lbl||!bar){render();return;}
+  const el=S.txStart?Math.round((Date.now()-S.txStart)/1000):0;
+  lbl.textContent=(TXPHASE[pr.phase]||'Working')+(pr.pct?' · '+pr.pct+'%':'')+(el>2?' · '+el+'s':'');
+  bar.style.width=(pr.pct||4)+'%';
+}
+
 async function transcribe(leadId){
-  S.transBusy=leadId;S.transErr=null;S.txProg=null;render();
+  S.transBusy=leadId;S.transErr=null;S.txProg=null;S.txStart=Date.now();render();
+  if(S.txTick)clearInterval(S.txTick);
+  S.txTick=setInterval(()=>{if(S.transBusy)txPaint();else{clearInterval(S.txTick);S.txTick=null;}},1000);
   try{
     const stored=await idbGet(leadId),rec=S.recs[leadId]||{};
     if(txEngine()==='device'){
@@ -522,10 +536,11 @@ function transcriptBlock(l){
   const t=S.trans[l.id],busy=S.transBusy===l.id,err=S.transErr&&S.transErr.id===l.id?S.transErr.msg:'';
   const lbl=`<div style="font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:${MUT(45)}">Transcript</div>`;
   if(busy){
-    const pr=S.txProg||{},ph={decode:'Reading the audio',download:'Downloading the model (once only)',load:'Starting the engine',transcribe:'Transcribing'}[pr.phase]||'Working';
+    const pr=S.txProg||{},el=S.txStart?Math.round((Date.now()-S.txStart)/1000):0;
+    const line=(TXPHASE[pr.phase]||'Working')+(pr.pct?' · '+pr.pct+'%':'')+(el>2?' · '+el+'s':'');
     return `<div style="padding:16px 0;border-bottom:1px solid var(--color-divider);display:flex;flex-direction:column;gap:9px">${lbl}
-      <div style="font-size:13px;color:${MUT(60)}">${esc(ph)}${pr.pct?' · '+pr.pct+'%':''}</div>
-      <div style="height:2px;background:${MUT(10)}"><div style="height:2px;width:${pr.pct||4}%;background:var(--color-accent);transition:width .3s"></div></div>
+      <div id="txlbl" style="font-size:13px;color:${MUT(60)}">${esc(line)}</div>
+      <div style="height:2px;background:${MUT(10)}"><div id="txbar" style="height:2px;width:${pr.pct||4}%;background:var(--color-accent);transition:width .3s"></div></div>
       <div style="font-size:11px;color:${MUT(40)}">Runs on this device — nothing is uploaded. Keep the tab open.</div>
     </div>`;
   }
@@ -549,6 +564,7 @@ function transcriptBlock(l){
       ${big?`<span style="font-size:11.5px;color:${MUT(50)}">Over 25 MB — use the on-device engine</span>`
            :`<button onclick="transcribe('${l.id}')" style="cursor:pointer;font-size:12.5px;padding:7px 14px;border:1px solid ${MUT(22)};border-radius:2px;background:none;color:var(--color-text)">Transcribe</button>`}
     </div>
+    ${dev?`<div style="font-size:11px;color:${MUT(38)};line-height:1.5">Most machines have no usable GPU, so this runs on the CPU — budget roughly 1–2 minutes per 10 minutes of audio. Pick Tiny if you only need the gist.</div>`:''}
     ${err?`<div style="font-size:11.5px;color:var(--color-accent-2-700);line-height:1.5;max-width:62ch">${esc(err)}</div>`:''}
   </div>`;
 }

@@ -13,18 +13,32 @@
 import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.5.1';
 
 env.allowLocalModels = false;
+// multi-threaded WASM needs SharedArrayBuffer, which needs cross-origin isolation.
+// Use every core when the page is isolated, otherwise stay single-threaded rather than crash.
+try {
+  if (self.crossOriginIsolated && env.backends && env.backends.onnx && env.backends.onnx.wasm) {
+    env.backends.onnx.wasm.numThreads = Math.min(4, (navigator.hardwareConcurrency || 2));
+  }
+} catch (e) { /* leave defaults */ }
 
 const post = m => self.postMessage(m);
 
+// navigator.gpu can exist while no adapter is actually obtainable (common on Windows
+// laptops and in locked-down Chrome). Only claim WebGPU if an adapter really comes back.
+let GPU_OK = null;
+async function gpuUsable() {
+  if (GPU_OK !== null) return GPU_OK;
+  try {
+    if (!navigator.gpu || !navigator.gpu.requestAdapter) { GPU_OK = false; return false; }
+    const a = await navigator.gpu.requestAdapter();
+    GPU_OK = !!a;
+  } catch (e) { GPU_OK = false; }
+  return GPU_OK;
+}
+
 let PIPE = null, PIPE_KEY = '', DEVICE = '';
 
-async function getPipe(model) {
-  const wantGpu = !!navigator.gpu;
-  const device = wantGpu ? 'webgpu' : 'wasm';
-  const key = model + '|' + device;
-  if (PIPE && PIPE_KEY === key) return PIPE;
-
-  PIPE = null; PIPE_KEY = '';
+async function build(model, device) {
   const opts = {
     progress_callback: p => {
       if (p.status === 'progress' && p.total) {
@@ -41,18 +55,24 @@ async function getPipe(model) {
     opts.device = 'wasm';
     opts.dtype = 'q8';
   }
+  return pipeline('automatic-speech-recognition', model, opts);
+}
 
+async function getPipe(model) {
+  const device = (await gpuUsable()) ? 'webgpu' : 'wasm';
+  const key = model + '|' + device;
+  if (PIPE && (PIPE_KEY === key || PIPE_KEY === model + '|wasm')) return PIPE;
+
+  PIPE = null; PIPE_KEY = '';
   post({ type: 'progress', phase: 'load', pct: 0 });
   try {
-    PIPE = await pipeline('automatic-speech-recognition', model, opts);
+    PIPE = await build(model, device);
     DEVICE = device;
   } catch (e) {
-    // WebGPU can fail on some drivers — fall back to WASM rather than giving up
-    if (device === 'webgpu') {
-      post({ type: 'progress', phase: 'load', pct: 0, file: 'retrying on wasm' });
-      PIPE = await pipeline('automatic-speech-recognition', model, {
-        progress_callback: opts.progress_callback, device: 'wasm', dtype: 'q8',
-      });
+    if (device !== 'wasm') {
+      // GPU path died at session creation or driver level — retry on CPU, silently
+      post({ type: 'progress', phase: 'load', pct: 0, file: 'no GPU, using CPU' });
+      PIPE = await build(model, 'wasm');
       DEVICE = 'wasm';
     } else throw e;
   }
@@ -90,7 +110,7 @@ self.onmessage = async e => {
       chunks: (out && Array.isArray(out.chunks))
         ? out.chunks.map(c => ({ start: c.timestamp && c.timestamp[0], end: c.timestamp && c.timestamp[1], text: c.text }))
         : null,
-      device: DEVICE, model: model,
+      device: DEVICE, model: model, secs: audio.length / 16000,
     });
   } catch (err) {
     post({ type: 'error', id, message: String((err && err.message) || err) });
