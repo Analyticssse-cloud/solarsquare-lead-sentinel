@@ -221,7 +221,7 @@ function errorView(why){
 // failed API call, and every screen carries a banner, so sample numbers can't be mistaken
 // for live ones.
 const SAMPLE=/[?&]sample=(1|admin)/.test(location.search);
-function sampleData(){
+function sampleData(role){
   const d=new Date(),iso=n=>{const x=new Date(d);x.setDate(x.getDate()-n);return x.toISOString();};  const today=d.toISOString().slice(0,10);
   const teams=[['amit.jaiswar@solarsquare.in','Amit Jaiswar','Pune',['Sakshi Jadhav','Tejal Pakhale','Manasi Jagtap']],
                ['unnati.dahikar@solarsquare.in','Unnati Dahikar','Indore',['Khushi Piplewar','Uday Jain']]];
@@ -249,22 +249,59 @@ function sampleData(){
       else{row.status_changed_at=iso(od);if(k===1)row.qualified_at=iso(od+2);}
       queue.push(row);}});
   });
-  return{queue,hierarchy,role:SAMPLE_ROLE,meEmail:teams[0][0],user:{name:'Sample '+(SAMPLE_ROLE==='admin'?'Admin':'TL'),email:teams[0][0]}};
+  // A stakeholder demo has to show a day IN PROGRESS, not an untouched queue: some RCAs
+  // submitted, some open, uneven across teams. A screen of zeros demos nothing.
+  const rcaLog=[];
+  const REASONS=['LRM did not attempt the follow-up on the due date',
+                 'Customer confirmed but LRM never updated the stage',
+                 'Closed as not interested without capturing an objection',
+                 'Meeting slipped and no new date was set',
+                 'Lead re-dialled from the wrong number, never connected'];
+  const ACTS=['Coach the LRM','Reassign the lead','Escalate to ZSM','No action needed'];
+  queue.forEach((r,i)=>{
+    const h=hierarchy.find(x=>x.lrm_email===r.lrm_email)||{};
+    // team 1 is ~75% through the day, team 2 ~40% — makes the progress table readable
+    const rate=h.tl_email===teams[0][0]?0.75:0.4;
+    if(((i*7)%10)/10 >= rate)return;
+    rcaLog.push({logged_at:iso(0),audit_date:today,lead_id:r.lead_id,category:r.category,
+      lrm_email:r.lrm_email,lrm_name:r.lrm_name,tl_email:h.tl_email||'',tl_name:h.tl_name||'',
+      auditor_email:h.tl_email||'',auditor_name:h.tl_name||'',
+      reason:REASONS[i%REASONS.length],severity:['low','med','high'][i%3],
+      action:ACTS[i%ACTS.length],note:'',why_path:'',assignee:''});
+  });
+  return{queue,hierarchy,rcaLog,role,
+    // An admin is not a TL: leaving meEmail set tags a team row "· you" on a
+    // stakeholder-facing screen while the header says Admin.
+    meEmail:role==='admin'?null:teams[0][0],
+    user:{name:'Sample '+(role==='admin'?'Admin':'Team Lead'),
+          email:role==='admin'?'admin@solarsquare.in':teams[0][0]}};
 }
-// ?sample=1 previews as a TL; ?sample=admin previews the admin/manager screens.
+// ?sample=1 previews as a TL; ?sample=admin opens on the admin screens. Either way the
+// banner's View-as toggle switches persona in place — no URL editing during a demo.
 const SAMPLE_ROLE=/[?&]sample=admin/.test(location.search)?'admin':'tl';
+function applySample(role){
+  const data=sampleData(role);
+  S.src='sample';S.role=data.role;S.user=data.user;S.meEmail=data.meEmail;
+  S.auditRaw=data.queue[0].audit_date;S.auditDate=fmtLongDate(data.queue[0].audit_date);
+  S.rcaLog=data.rcaLog||[];S.audits={};
+  S.rcaLog.forEach(x=>{S.audits[x.lead_id]={reason:x.reason,sev:x.severity,note:x.note||'',
+    action:x.action,submitted:true,at:''};});
+  buildModel(data.queue,data.hierarchy);
+  S.screen=role==='admin'?'mgr':'queue';
+  render();
+}
 function sampleBanner(){
-  return SAMPLE?`<div style="background:var(--color-accent-2);color:var(--color-bg);font-size:12.5px;font-weight:600;letter-spacing:.04em;text-align:center;padding:6px 12px">SAMPLE DATA — layout preview only${SAMPLE_ROLE==='admin'?' (admin view)':''}. Remove the ?sample flag from the URL for live data.</div>`:'';
+  if(!SAMPLE)return'';
+  const btn=(r,lbl)=>`<button data-act="sampleRole" data-v="${r}" style="background:${S.role===r?'var(--color-bg)':'transparent'};color:${S.role===r?'var(--color-accent-2)':'var(--color-bg)'};border:1px solid var(--color-bg);border-radius:2px;font-family:inherit;font-size:11.5px;font-weight:600;padding:2px 10px;cursor:pointer">${lbl}</button>`;
+  return `<div style="background:var(--color-accent-2);color:var(--color-bg);padding:6px 12px;display:flex;align-items:center;justify-content:center;gap:16px;flex-wrap:wrap">
+    <span style="font-size:12.5px;font-weight:600;letter-spacing:.04em">SAMPLE DATA — for demonstration, not live numbers</span>
+    <span style="display:flex;align-items:center;gap:6px"><span style="font-size:11.5px;opacity:.85">View as</span>${btn('tl','Team Lead')}${btn('admin','Admin')}</span>
+  </div>`;
 }
 
 function fetchT(url,ms,headers){const c=new AbortController();const t=setTimeout(()=>c.abort(),ms||3500);return fetch(url,{signal:c.signal,headers:headers||{}}).finally(()=>clearTimeout(t));}
 async function load(){
-  if(SAMPLE){
-    const data=sampleData();
-    S.src='sample';S.role=data.role;S.user=data.user;S.meEmail=data.meEmail;
-    S.auditRaw=data.queue[0].audit_date;S.auditDate=fmtLongDate(data.queue[0].audit_date);
-    buildModel(data.queue,data.hierarchy);render();return;
-  }
+  if(SAMPLE){applySample(SAMPLE_ROLE);return;}
   await initAuth();
   const sess=readSession();
   if(AUTH.enabled&&!sess){return loginView(false);}
@@ -381,7 +418,7 @@ const TLS=()=>S.model?S.model.tls:[];
 // breach has stood plus how long the lead has been silent). No synthetic score, no tiers.
 function catLeads(k){return L().filter(l=>l.cat===k).slice()
   .sort((a,b)=>(b.key-a.key)||(b.silent-a.silent)||(b.days-a.days)||String(a.name).localeCompare(String(b.name)));}
-const rcaDone=id=>{if(S.audits[id]&&S.audits[id].reason)return true;const t=S.auditRaw||'';return (S.rcaLog||[]).some(x=>x.lead_id===id&&String(x.audit_date||'')===t);};
+const rcaDone=id=>{const a=S.audits[id];if(a&&a.submitted)return true;const t=S.auditRaw||'';return (S.rcaLog||[]).some(x=>x.lead_id===id&&String(x.audit_date||'')===t);};
 const audited=()=>L().filter(l=>rcaDone(l.id)).length;
 function myTlName(){const t=TLS().find(x=>x.me)||TLS().find(x=>x.email===S.tlEmail);return t?t.name:'You';}
 
@@ -436,7 +473,7 @@ async function loadRcaLog(){
     // rehydrate my own RCAs for today so a reload doesn't look like unfinished work
     const today=S.auditRaw||'';
     S.rcaLog.forEach(x=>{if(String(x.audit_date||'')===today&&x.lead_id&&!S.audits[x.lead_id])
-      S.audits[x.lead_id]={reason:x.reason||'',sev:x.severity||'',note:x.note||'',action:x.action||'No action needed'};});
+      S.audits[x.lead_id]={reason:x.reason||'',sev:x.severity||'',note:x.note||'',action:x.action||'No action needed',submitted:true,at:''};});
     render();
   }catch(e){}
 }
@@ -486,6 +523,7 @@ function diagBlock(){
       ${row('Queue rows pulled',p.queueRows!=null?p.queueRows:'—')}
       ${row('Mapping rows',p.hierarchyRows!=null?p.hierarchyRows:'—')}
       ${row('LRMs in queue · in mapping · matched',(p.distinctLrmInQueue||0)+' · '+(p.distinctLrmInMap||0)+' · <b>'+(p.lrmMatchedBoth||0)+'</b>')}
+      ${p.excludedRowsUnmappedLrm?row('Rows excluded · LRM not in mapping',p.excludedRowsUnmappedLrm+' <span style="color:'+MUT(40)+'">from '+(p.excludedLrmCount||0)+' LRMs</span>'):''}
       ${row('Queue rows with no LRM email',p.queueRowsWithBlankLrmEmail!=null?p.queueRowsWithBlankLrmEmail:'—')}
       ${p.queueRowsResolvedByName?row('Matched to a TL by name instead',p.queueRowsResolvedByName):''}
     </div>
@@ -501,11 +539,15 @@ function diagBlock(){
 function screensFor(){
   // A TL audits their own team's leads and tracks their own adherence — nothing else.
   // Cross-team progress is a manager's question, so 'mgr' is not offered to TLs.
+  // In SAMPLE mode every screen is reachable: a presenter has to be able to walk
+  // stakeholders through the queue, the five whys and Submit, then the manager view,
+  // without editing the URL mid-sentence.
+  if(SAMPLE)return [['queue','Audit queue'],['adher','My adherence'],['rca','RCA audit'],['mgr','Team progress'],['settings','Settings']];
   const out=[];
   if(isTL())return [['queue','Audit queue'],['adher','My adherence']];
   if(isAud())out.push(['rca','RCA audit']);
   out.push(['mgr','Team progress']);
-  if(S.role==='admin'||SAMPLE)out.push(['settings','Settings']);
+  if(S.role==='admin')out.push(['settings','Settings']);
   return out;
 }
 function render(){
@@ -656,6 +698,14 @@ function auditPanel(){
   const l=L().find(x=>x.id===S.selId)||{timeline:[]};if(!l.id)return'<div></div>';
   const cat=catObj(S.catKey),a=S.audits[l.id]||{},dl=catLeads(S.catKey),rank=dl.findIndex(x=>x.id===l.id)+1;
   const w=whyWalk(l),concluded=!!w.terminal,done=rcaDone(l.id);
+  // An RCA is only submittable once it says something: a root cause, a severity and a
+  // corrective action. The blocker text names the missing piece instead of just greying
+  // the button out.
+  const blocker=!concluded?'Work the whys to a root cause'
+    :!a.sev?'Set a severity'
+    :!a.action?'Choose a corrective action'
+    :'';
+  const ready=!blocker;
   const kicker=t=>`<div style="font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:${MUT(40)};margin-bottom:8px">${t}</div>`;
   const tl=(l.timeline||[]).map((r,i)=>{
     const dot=r.kind==='done'?'width:9px;height:9px;border-radius:999px;background:var(--color-text)':r.kind==='miss'?'width:9px;height:9px;border-radius:999px;border:1.5px solid var(--color-accent-2)':'width:9px;height:9px;border-radius:999px;border:1.5px solid '+MUT(28);
@@ -701,11 +751,15 @@ function auditPanel(){
       </div>`:''}
     </div>
 
-    <div style="display:flex;align-items:baseline;gap:24px;padding:32px 0 0">
+    <div style="display:flex;align-items:center;gap:24px;flex-wrap:wrap;padding:32px 0 0">
       <button data-act="prev" style="background:none;border:none;padding:0;cursor:pointer;font-family:inherit;font-size:13.5px;color:${MUT(52)};text-decoration:underline">← Previous</button>
       <span style="flex:1"></span>
-      <span style="font-size:12.5px;color:${MUT(45)}">${done?'Logged':'Work the whys to a root cause'}</span>
-      <button data-act="next" style="cursor:pointer;font-family:inherit;font-size:14px;font-weight:600;padding:10px 20px;border:1px solid var(--color-text);background:var(--color-text);color:var(--color-bg);border-radius:2px">Next lead →</button>
+      ${done
+        ? `<span style="font-size:13px;color:${MUT(50)}">Submitted${a.at?' · '+esc(a.at):''}</span>
+           <button data-act="reopen" style="background:none;border:none;padding:0;cursor:pointer;font-family:inherit;font-size:13px;color:${MUT(52)};text-decoration:underline">Edit</button>
+           <button data-act="next" style="cursor:pointer;font-family:inherit;font-size:14px;font-weight:600;padding:10px 20px;border:1px solid var(--color-text);background:var(--color-text);color:var(--color-bg);border-radius:2px">Next lead →</button>`
+        : `<span style="font-size:12.5px;color:${ready?MUT(50):'var(--color-accent-2-800)'}">${ready?'Ready to submit':esc(blocker)}</span>
+           <button data-act="submitRca" ${ready?'':'aria-disabled="true"'} style="cursor:${ready?'pointer':'not-allowed'};font-family:inherit;font-size:14px;font-weight:600;padding:10px 22px;border-radius:2px;border:1px solid ${ready?'var(--color-text)':MUT(22)};background:${ready?'var(--color-text)':'transparent'};color:${ready?'var(--color-bg)':MUT(38)}">Submit RCA</button>`}
     </div>
   </div>`;
 }
@@ -808,7 +862,7 @@ function settingsView(){
     <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:18px;padding-bottom:20px">${stat('ADOS',dir.ados,'reporting lines')}${stat('ZSMs',dir.zsm,'reporting lines')}${stat('Team Leads',dir.tl,'reporting lines')}${stat('LRMs',dir.lrm,'in EmployeeMaster')}</div>
     <div class="card elev-sm" style="padding:22px 24px;gap:6px;margin-bottom:20px">
       <div style="font-size:14px;font-weight:700">Sample data · layout preview</div>
-      <div style="font-size:12px;color:${MUT(60)};line-height:1.55;max-width:70ch">Opens every screen filled with invented leads, so you can review the interface when today’s queue is empty or while the export is being fixed. Sample mode is banner-marked throughout, writes nothing to the RCA log, and is only ever entered deliberately — it never replaces live data on a failure.</div>
+      <div style="font-size:12px;color:${MUT(60)};line-height:1.55;max-width:70ch">Opens every screen filled with invented leads and a day already half-audited — for walking stakeholders through the tool, or reviewing the interface when today’s queue is empty. Sample mode is banner-marked throughout, writes nothing to the RCA log, and is only ever entered deliberately. Once in it, the banner’s <b>View as</b> toggle switches between the Team Lead and Admin experience without reloading.</div>
       <div style="display:flex;gap:10px;margin-top:14px">
         ${SAMPLE
           ? `<a class="btn btn-primary" href="${esc(location.pathname)}">Return to live data</a>`
@@ -855,19 +909,34 @@ function mgrView(){
 }
 
 // ---- events ----
-function patch(id,o){S.audits[id]=Object.assign({reason:'',sev:'',note:'',action:'No action needed'},S.audits[id],o);}
+function patch(id,o){S.audits[id]=Object.assign({reason:'',sev:'',note:'',action:'No action needed',submitted:false,at:''},S.audits[id],o);}
+// Submitting is a deliberate act, not a side effect of typing: the RCA stays a draft until
+// the TL presses Submit. That press is what gets logged and what "done" counts.
+function submitRca(id){
+  const a=S.audits[id]||{};
+  if(!a.reason||!a.sev||!a.action)return;
+  const d=new Date(),hh=d.getHours()%12||12,ap=d.getHours()<12?'AM':'PM';
+  patch(id,{submitted:true,at:hh+':'+String(d.getMinutes()).padStart(2,'0')+' '+ap});
+  queueRca(id);
+  const dl=catLeads(S.catKey),i=dl.findIndex(x=>x.id===id);
+  for(let k=1;k<=dl.length;k++){const j=(i+k)%dl.length;if(!rcaDone(dl[j].id)){S.selId=dl[j].id;break;}}
+  render();
+}
 function patchRv(id,o){S.rcaReview[id]=Object.assign({verdict:null,note:'',assignee:'',notified:false},S.rcaReview[id],o);}
 document.addEventListener('click',e=>{
   const t=e.target.closest('[data-act]');if(!t)return;const act=t.dataset.act,v=t.dataset.v;
   if(act==='nav'){S.screen=v;render();}
   else if(act==='diag'){loadDiag();}
+  else if(act==='sampleRole'){if(SAMPLE&&v!==S.role)applySample(v);}
   else if(act==='signout'){signOut();}
   else if(act==='rules'){S.showRules=!S.showRules;render();}
   else if(act==='cat'){S.catKey=v;S.selId=(catLeads(v)[0]||{}).id;render();}
   else if(act==='lead'){S.selId=v;render();}
-  else if(act==='sev'){patch(S.selId,{sev:v});queueRca(S.selId);render();}
+  else if(act==='sev'){patch(S.selId,{sev:v});render();}
   else if(act==='why'){const l=L().find(x=>x.id===S.selId);if(!l)return;const idx=((S.audits[S.selId]&&S.audits[S.selId].whyIdx)||[]).slice();idx.push(+v);patch(S.selId,{whyIdx:idx});const w=whyWalk(l);if(w.terminal){patch(S.selId,{reason:w.terminal});if(!(S.audits[S.selId]&&S.audits[S.selId].sev))patch(S.selId,{sev:'med'});}else patch(S.selId,{reason:''});render();}
   else if(act==='whyBack'){const idx=((S.audits[S.selId]&&S.audits[S.selId].whyIdx)||[]).slice(0,+v);patch(S.selId,{whyIdx:idx,reason:''});render();}
+  else if(act==='submitRca'){submitRca(S.selId);}
+  else if(act==='reopen'){patch(S.selId,{submitted:false});render();}
   else if(act==='prev'){const dl=catLeads(S.catKey),i=dl.findIndex(x=>x.id===S.selId);S.selId=dl[(i-1+dl.length)%dl.length].id;render();}
   else if(act==='next'){const dl=catLeads(S.catKey),i=dl.findIndex(x=>x.id===S.selId);for(let k=1;k<=dl.length;k++){const j=(i+k)%dl.length;if(!rcaDone(dl[j].id)){S.selId=dl[j].id;render();return;}}S.selId=dl[(i+1)%dl.length].id;render();}
   else if(act==='rcaAccept'){const cur=S.rcaReview[v]||{};patchRv(v,{verdict:cur.verdict==='accept'?null:'accept'});render();}
@@ -877,8 +946,8 @@ document.addEventListener('click',e=>{
   else if(act==='auditorRemove'){ensureAuditors();S.rcaAuditors=S.rcaAuditors.filter(x=>x!==v);persistAuditors();render();}
 });
 document.addEventListener('change',e=>{const t=e.target.closest('[data-act]');if(!t)return;
-  if(t.dataset.act==='reason'){patch(S.selId,{reason:t.value});if(t.value&&!(S.audits[S.selId]&&S.audits[S.selId].sev))patch(S.selId,{sev:'med'});queueRca(S.selId);render();}
-  else if(t.dataset.act==='action'){patch(S.selId,{action:t.value});queueRca(S.selId);}
+  if(t.dataset.act==='reason'){patch(S.selId,{reason:t.value});if(t.value&&!(S.audits[S.selId]&&S.audits[S.selId].sev))patch(S.selId,{sev:'med'});render();}
+  else if(t.dataset.act==='action'){patch(S.selId,{action:t.value});render();}
   else if(t.dataset.act==='rcaAssignee'){patchRv(t.dataset.v,{assignee:t.value,notified:false});render();}
 });
 document.addEventListener('input',e=>{const t=e.target.closest('[data-act]');if(!t)return;
