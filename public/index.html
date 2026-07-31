@@ -210,7 +210,8 @@ function errorView(why){
     no_server:['No API on this host','<code>/api/queue</code> returned 404. Serverless routes only run on the deployed Vercel app — this is expected in a local preview.'],
     empty:['Queue is empty','The API answered, but returned no rows. Run <code>audit_queue_daily_v3.sql</code> and paste today\u2019s export into the <b>Audit_Queue</b> sheet.'],
     http:['API error '+(w.status||''),esc(w.detail||'The queue endpoint returned an error. Check the Vercel function logs.')],
-    net:['Could not reach the API',esc(w.detail||'The request failed or timed out.')]
+    slow:['The queue took too long','The request to <code>/api/queue</code> timed out. On a cold start the Metabase query plus the sheet read can exceed the limit — <b>Reload</b> usually succeeds because the result is then cached. If it keeps timing out, the Vercel function itself is being cut short (Hobby caps at 10s).'],
+    net:['Could not reach the API',esc(w.detail||'The request failed.')]
   }[w.kind||'net'];
   document.getElementById('app').innerHTML=`<div style="min-height:100vh;display:grid;place-items:center;padding:40px 24px">
     <div style="max-width:520px;text-align:center;display:flex;flex-direction:column;align-items:center">
@@ -231,17 +232,26 @@ async function load(){
   if(AUTH.enabled&&!sess){return loginView(false);}
   document.getElementById('app').innerHTML='<div class="wrap" style="padding-top:80px;text-align:center;color:'+MUT(55)+';font-size:14px">Loading Lead Sentinel…</div>';
   let data=null,fail={kind:'net'};
-  try{const r=await fetchT('/api/queue',20000,authHeaders());
-    if(r.status===401||r.status===403){let reason='';try{reason=(await r.json()).error||'';}catch(e){}return loginView(true,reason);}
-    if(r.status===404){fail={kind:'no_server'};}
-    else if(!r.ok){let d='';try{d=(await r.json()).error||'';}catch(e){}fail={kind:'http',status:r.status,detail:d};}
-    else{const j=await r.json();
-      // An empty queue is a normal day, not a failure — load the app and show an empty state.
-      // Only a missing or erroring API blocks entry.
-      if(j&&Array.isArray(j.queue)){data=j;S.src='live';}
-      else fail={kind:'empty'};
+  // One retry: the first call after a deploy pays the cold start and can outrun the budget,
+  // while the second lands on a warm function with the response already cached.
+  for(let attempt=0;attempt<2&&!data;attempt++){
+    if(attempt)document.getElementById('app').innerHTML='<div class="wrap" style="padding-top:80px;text-align:center;color:'+MUT(55)+';font-size:14px">Still loading — the first request after a deploy is slow…</div>';
+    try{const r=await fetchT('/api/queue',attempt?90000:45000,authHeaders());
+      if(r.status===401||r.status===403){let reason='';try{reason=(await r.json()).error||'';}catch(e){}return loginView(true,reason);}
+      if(r.status===404){fail={kind:'no_server'};break;}
+      else if(!r.ok){let d='';try{d=(await r.json()).error||'';}catch(e){}fail={kind:'http',status:r.status,detail:d};}
+      else{const j=await r.json();
+        // An empty queue is a normal day, not a failure — load the app and show an empty state.
+        // Only a missing or erroring API blocks entry.
+        if(j&&Array.isArray(j.queue)){data=j;S.src='live';}
+        else fail={kind:'empty'};
+        break;
+      }
+    }catch(e){
+      const ab=e&&(e.name==='AbortError'||/abort/i.test(String(e.message||'')));
+      fail=ab?{kind:'slow'}:{kind:'net',detail:String(e&&e.message||e)};
     }
-  }catch(e){fail={kind:'net',detail:String(e&&e.message||e)};}
+  }
   if(!data){return errorView(fail);}
   S.role=data.role||'tl';
   S.user=data.user||sess||null;
