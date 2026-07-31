@@ -148,7 +148,7 @@ const LEAKLBL={L1:'Meeting date passed, nothing since',L2:'Marked CNC, never re-
 const silentLbl=l=>{if(l.lastAt==null)return'never touched';const h=l.hoursSilent||0;if(h<24)return h<=1?'active this hour':h+'h silent';return (l.silent||Math.round(h/24))+'d silent';};
 const catObj=k=>CATS.find(c=>c.key===k);
 
-const S={screen:'queue',recs:{},recBusy:null,tlEmail:null,catKey:'mcch_past',selId:null,audits:{},rcaReview:{},showRules:false,model:null,src:'demo',role:'demo',user:null,meEmail:null,hier:[],rcaAuditors:null,newAuditor:'',dirQ:''};
+const S={screen:'queue',recs:{},recBusy:null,trans:{},transBusy:null,transErr:null,txCopied:null,txProg:null,tlEmail:null,catKey:'mcch_past',selId:null,audits:{},rcaReview:{},showRules:false,model:null,src:'demo',role:'demo',user:null,meEmail:null,hier:[],rcaAuditors:null,newAuditor:'',dirQ:''};
 
 const AUTH={enabled:true,ready:false,clientId:'',domain:'solarsquare.in',admins:[]};
 const LOGO_SRC='https://cdn.solarsquare.in/blog/wp-content/uploads/2025/11/05101757/logo.webp';
@@ -419,7 +419,8 @@ function idb(){if(IDB)return IDB;IDB=new Promise((res,rej)=>{const q=indexedDB.o
 async function idbPut(k,v){const db=await idb();return new Promise((res,rej)=>{const t=db.transaction('r','readwrite');t.objectStore('r').put(v,k);t.oncomplete=res;t.onerror=()=>rej(t.error);});}
 async function idbAll(){const db=await idb();return new Promise((res,rej)=>{const t=db.transaction('r','readonly'),s=t.objectStore('r'),out={},c=s.openCursor();c.onsuccess=e=>{const cur=e.target.result;if(!cur)return res(out);out[cur.key]=cur.value;cur.continue();};c.onerror=()=>rej(c.error);});}
 async function idbDel(k){const db=await idb();return new Promise(res=>{const t=db.transaction('r','readwrite');t.objectStore('r').delete(k);t.oncomplete=res;});}
-async function hydrateRecs(){try{const all=await idbAll();Object.keys(all).forEach(k=>{const r=all[k];S.recs[k]={name:r.name,size:r.size,url:r.url||URL.createObjectURL(r.blob),remote:!!r.url,at:r.at};});if(Object.keys(all).length)render();}catch(e){}}
+async function idbGet(k){const db=await idb();return new Promise((res,rej)=>{const t=db.transaction('r','readonly'),q=t.objectStore('r').get(k);q.onsuccess=()=>res(q.result||null);q.onerror=()=>rej(q.error);});}
+async function hydrateRecs(){try{const all=await idbAll();Object.keys(all).forEach(k=>{const r=all[k];S.recs[k]={name:r.name,size:r.size,url:r.url||URL.createObjectURL(r.blob),remote:!!r.url,at:r.at};if(r.transcript)S.trans[k]=r.transcript;});if(Object.keys(all).length)render();}catch(e){}}
 const kb=n=>n>=1048576?(n/1048576).toFixed(1)+' MB':Math.max(1,Math.round(n/1024))+' KB';
 
 async function recPick(input,leadId){
@@ -433,10 +434,124 @@ async function recPick(input,leadId){
     const r=await fetch('/api/recording?lead='+encodeURIComponent(leadId)+'&name='+encodeURIComponent(f.name),
       {method:'POST',headers:Object.assign({'Content-Type':f.type||'application/octet-stream'},authHeaders()),body:f});
     if(r.ok){const j=await r.json();rec.remote=true;rec.url=j.url;try{await idbPut(leadId,{name:f.name,size:f.size,url:j.url,at:rec.at});}catch(e){}}
+    else if(r.status===404)rec.noServer=true;
   }catch(e){}
   S.recBusy=null;render();
 }
-async function recDrop(leadId){delete S.recs[leadId];await idbDel(leadId);render();}
+async function recDrop(leadId){delete S.recs[leadId];delete S.trans[leadId];if(S.transErr&&S.transErr.id===leadId)S.transErr=null;await idbDel(leadId);render();}
+
+// ---- transcription ----
+// Two interchangeable engines. 'device' is the default and costs nothing: Whisper (MIT)
+// runs in this browser via WebGPU/WASM and the audio never leaves the machine.
+// 'server' posts to /api/transcribe, which can front OpenAI OR a self-hosted Whisper box
+// (set TRANSCRIBE_URL) — switching backends never touches this file.
+const MAX_TX=25*1024*1024;
+const TX_MODELS=[['Xenova/whisper-tiny','Tiny · fastest'],['Xenova/whisper-base','Base · balanced'],['Xenova/whisper-small','Small · best for Hindi']];
+const txEngine=()=>localStorage.getItem('ls_tx_engine')||'device';
+const txModel=()=>localStorage.getItem('ls_tx_model')||'Xenova/whisper-base';
+const txLang=()=>localStorage.getItem('ls_tx_lang')||'';
+function txSet(k,v){localStorage.setItem('ls_tx_'+k,v);render();}
+
+// decode any browser-readable audio file to the 16 kHz mono Float32 Whisper expects
+async function decodeTo16k(blob){
+  const ab=await blob.arrayBuffer();
+  const AC=window.AudioContext||window.webkitAudioContext;
+  let buf;
+  try{buf=await new AC({sampleRate:16000}).decodeAudioData(ab);}
+  catch(e){throw new Error('This browser cannot decode '+(blob.type||'this format')+'. Convert the recording to mp3 or wav and re-upload.');}
+  if(buf.numberOfChannels===1)return buf.getChannelData(0);
+  const a=buf.getChannelData(0),b=buf.getChannelData(1),out=new Float32Array(a.length);
+  for(let i=0;i<a.length;i++)out[i]=(a[i]+b[i])/2;
+  return out;
+}
+
+let TXW=null;
+function txWorker(){
+  if(TXW)return TXW;
+  TXW=new Worker('whisper-worker.js',{type:'module'});
+  TXW.onmessage=e=>{
+    const m=e.data||{};
+    if(m.type==='progress'){S.txProg={phase:m.phase,pct:m.pct||0,file:m.file||''};render();return;}
+    if(m.type==='done'){
+      const t={text:m.text,lang:txLang()||'auto',model:(m.model||'').split('/').pop()+' · on-device'+(m.device==='webgpu'?' (GPU)':''),dur:null,at:new Date().toISOString(),chunks:m.chunks};
+      if(!m.text){S.transErr={id:m.id,msg:'No speech detected. Check the recording actually has audio.'};}
+      else{S.trans[m.id]=t;idbGet(m.id).then(st=>idbPut(m.id,Object.assign({},st||{},{transcript:t}))).catch(()=>{});}
+      S.transBusy=null;S.txProg=null;render();return;
+    }
+    if(m.type==='error'){S.transErr={id:m.id,msg:m.message};S.transBusy=null;S.txProg=null;render();}
+  };
+  TXW.onerror=e=>{S.transErr={id:S.transBusy,msg:'On-device engine failed to start: '+((e&&e.message)||'worker error')+'. Your browser may block module workers — try Chrome, or switch to the server engine.'};S.transBusy=null;S.txProg=null;render();};
+  return TXW;
+}
+
+async function transcribe(leadId){
+  S.transBusy=leadId;S.transErr=null;S.txProg=null;render();
+  try{
+    const stored=await idbGet(leadId),rec=S.recs[leadId]||{};
+    if(txEngine()==='device'){
+      let blob=stored&&stored.blob;
+      if(!blob&&rec.remote&&rec.url){const g=await fetch(rec.url);blob=await g.blob();}
+      if(!blob)throw new Error('The audio is no longer available on this device. Re-upload it and try again.');
+      S.txProg={phase:'decode',pct:0};render();
+      const audio=await decodeTo16k(blob);
+      txWorker().postMessage({type:'run',id:leadId,audio,model:txModel(),language:txLang()||null},[audio.buffer]);
+      return;  // the worker's messages finish the job
+    }
+    let body,ctype;
+    if(stored&&stored.blob){body=stored.blob;ctype=stored.blob.type||'application/octet-stream';}
+    else if(rec.remote&&rec.url){body=JSON.stringify({url:rec.url,name:rec.name});ctype='application/json';}
+    else throw new Error('The audio is no longer available on this device. Re-upload it and try again.');
+    const r=await fetch('/api/transcribe?lead='+encodeURIComponent(leadId)+'&name='+encodeURIComponent(rec.name||'recording')+(txLang()?'&lang='+txLang():''),
+      {method:'POST',headers:Object.assign({'Content-Type':ctype},authHeaders()),body});
+    if(r.status===404)throw new Error('No transcription service at /api/transcribe. It only runs on the deployed app — switch to the on-device engine, which needs no server.');
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok)throw new Error(j.message||j.error||('Transcription failed — HTTP '+r.status));
+    if(!j.text)throw new Error('The model returned no speech. Check the recording actually has audio.');
+    const t={text:j.text,lang:j.language||'',model:j.model||'',dur:j.duration||null,at:new Date().toISOString()};
+    S.trans[leadId]=t;
+    try{await idbPut(leadId,Object.assign({},stored||{name:rec.name,size:rec.size,url:rec.url,at:rec.at},{transcript:t}));}catch(e){}
+  }catch(e){S.transErr={id:leadId,msg:String(e.message||e)};}
+  if(!(txEngine()==='device'&&S.transBusy===leadId&&!S.transErr)){S.transBusy=null;S.txProg=null;}
+  render();
+}
+function txCopy(leadId){const t=S.trans[leadId];if(!t)return;navigator.clipboard&&navigator.clipboard.writeText(t.text);S.txCopied=leadId;render();setTimeout(()=>{if(S.txCopied===leadId){S.txCopied=null;render();}},1400);}
+function txToNote(leadId){const t=S.trans[leadId];if(!t)return;const a=S.audits[leadId]=S.audits[leadId]||{};a.note=(a.note?a.note+' ':'')+t.text.trim().slice(0,240);render();}
+const mmss=s=>{if(!s&&s!==0)return'';const m=Math.floor(s/60);return m+':'+String(Math.round(s%60)).padStart(2,'0');}
+function transcriptBlock(l){
+  const rec=S.recs[l.id];if(!rec)return'';
+  const t=S.trans[l.id],busy=S.transBusy===l.id,err=S.transErr&&S.transErr.id===l.id?S.transErr.msg:'';
+  const lbl=`<div style="font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:${MUT(45)}">Transcript</div>`;
+  if(busy){
+    const pr=S.txProg||{},ph={decode:'Reading the audio',download:'Downloading the model (once only)',load:'Starting the engine',transcribe:'Transcribing'}[pr.phase]||'Working';
+    return `<div style="padding:16px 0;border-bottom:1px solid var(--color-divider);display:flex;flex-direction:column;gap:9px">${lbl}
+      <div style="font-size:13px;color:${MUT(60)}">${esc(ph)}${pr.pct?' · '+pr.pct+'%':''}</div>
+      <div style="height:2px;background:${MUT(10)}"><div style="height:2px;width:${pr.pct||4}%;background:var(--color-accent);transition:width .3s"></div></div>
+      <div style="font-size:11px;color:${MUT(40)}">Runs on this device — nothing is uploaded. Keep the tab open.</div>
+    </div>`;
+  }
+  if(t){
+    const meta=[t.lang?String(t.lang).toUpperCase():'',t.dur?mmss(t.dur):'',t.model].filter(Boolean).join(' · ');
+    const act=(fn,txt)=>`<button onclick="${fn}" style="background:none;border:none;cursor:pointer;padding:0;font-size:11.5px;color:${MUT(55)};text-decoration:underline">${txt}</button>`;
+    return `<div style="padding:16px 0;border-bottom:1px solid var(--color-divider);display:flex;flex-direction:column;gap:10px">
+      <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap">${lbl}<span style="flex:1"></span><span style="font-size:11px;color:${MUT(40)}">${esc(meta)}</span>${act("txCopy('"+l.id+"')",S.txCopied===l.id?'Copied':'Copy')}${act("txToNote('"+l.id+"')",'To coaching note')}${act("transcribe('"+l.id+"')",'Re-run')}</div>
+      <div style="font-size:13.5px;line-height:1.65;color:${MUT(88)};max-height:220px;overflow:auto;white-space:pre-wrap;text-wrap:pretty">${esc(t.text)}</div>
+    </div>`;
+  }
+  const dev=txEngine()==='device';
+  const big=!dev&&(rec.size||0)>MAX_TX;
+  const sel=(k,cur,opts)=>`<select onchange="txSet('${k}',this.value)" style="font-size:11.5px;padding:5px 6px;border:1px solid ${MUT(16)};border-radius:2px;background:var(--color-bg);color:${MUT(70)};font-family:inherit">${opts.map(o=>`<option value="${esc(o[0])}" ${cur===o[0]?'selected':''}>${esc(o[1])}</option>`).join('')}</select>`;
+  return `<div style="padding:16px 0;border-bottom:1px solid var(--color-divider);display:flex;flex-direction:column;gap:10px">
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">${lbl}
+      <span style="flex:1"></span>
+      ${sel('engine',txEngine(),[['device','On-device · free'],['server','Server']])}
+      ${dev?sel('model',txModel(),TX_MODELS):''}
+      ${sel('lang',txLang(),[['','Auto-detect'],['hi','Hindi'],['en','English'],['mr','Marathi'],['gu','Gujarati'],['ta','Tamil'],['te','Telugu'],['kn','Kannada']])}
+      ${big?`<span style="font-size:11.5px;color:${MUT(50)}">Over 25 MB — use the on-device engine</span>`
+           :`<button onclick="transcribe('${l.id}')" style="cursor:pointer;font-size:12.5px;padding:7px 14px;border:1px solid ${MUT(22)};border-radius:2px;background:none;color:var(--color-text)">Transcribe</button>`}
+    </div>
+    ${err?`<div style="font-size:11.5px;color:var(--color-accent-2-700);line-height:1.5;max-width:62ch">${esc(err)}</div>`:''}
+  </div>`;
+}
 
 const AUDIO_ACCEPT='audio/*,.mp3,.wav,.m4a,.aac,.ogg,.oga,.opus,.flac,.wma,.amr,.3gp,.webm,.mp4,.caf,.aiff,.aif';
 function recordingBlock(l){
@@ -479,6 +594,7 @@ function auditPanel(){
       <div><div style="font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:${MUT(52)};margin-bottom:6px">What breached here</div><div style="font-size:14px;line-height:1.55;color:${MUT(88)}">${esc(cat.check)}</div></div>
       ${activityBlock(l)}
       ${recordingBlock(l)}
+      ${transcriptBlock(l)}
       <details><summary style="font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:${MUT(50)};cursor:pointer">Full lead history</summary><div class="ls-scroll" style="display:flex;align-items:flex-start;overflow-x:auto;padding-top:16px">${tl}</div></details>
       ${rcaBlock}
       <div style="display:flex;align-items:center;justify-content:space-between;gap:12px"><button class="btn btn-secondary" data-act="prev" style="font-size:13px">← Previous</button><span style="font-size:11.5px;color:${MUT(45)}">${done?'RCA submitted ✓':'Work through the 5 Whys to reach the root cause'}</span><button class="btn btn-primary" data-act="next">Submit RCA &amp; next →</button></div>
