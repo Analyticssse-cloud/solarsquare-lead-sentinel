@@ -37,14 +37,14 @@ const CATS=[
   check:'Meeting (MCCH) is confirmed for a future date but the slot is outside the D+2 window, the customer confirmation is missing, or prep was not done.',
   reasons:['Customer confirmation not logged','Slot beyond D+2 window','No prep note sent to customer','Held / duplicate slot']},
 ];
-const ACTIONS=['No action needed','Re-open the lead','Reassign to another rep','Ask rep to call today','Escalate to manager'];
+const ACTIONS=['No action needed','Re-open the lead','Reassign to another LRM','Ask LRM to call today','Escalate to manager'];
 const SEVS=[['low','Low'],['med','Medium'],['high','High']];
 const SEVMETA={low:['Low sev','background:var(--color-accent-2-100);color:var(--color-accent-2-800)'],med:['Med sev','background:var(--color-accent-100);color:var(--color-accent-800)'],high:['High sev','background:var(--color-accent-200);color:var(--color-accent-800)']};
 const RULES=[
  ['1','Pool','Every lead where a breach condition fired in the last 30 days, up to today.'],
  ['2','Eligibility','Category rule applied, minus anything RCA-ed in the last 7 days — a cooldown so leads keep rotating.'],
- ['3','Severity score','60% breach urgency + 40% rep deviation risk → P1 / P2 / P3.'],
- ['4','Daily pick','Top 4 per category, rep-balanced and seeded to the date so the pull is reproducible.'],
+ ['3','Severity score','60% breach urgency + 40% LRM deviation risk → P1 / P2 / P3.'],
+ ['4','Daily pick','Top 4 per category, LRM-balanced and seeded to the date so the pull is reproducible.'],
 ];
 const MTD={audited:387,total:420,range:'Jul 1–25'};
 // 5-Why decision trees. WHYS[cat](lead) returns the opening node; every option either
@@ -55,44 +55,44 @@ const WHYS={
     a:[
       {t:'The meeting never took place',to:{q:'Why did the confirmed meeting not happen?',a:[
         {t:'Customer no-showed',to:{q:'Why has it not been rescheduled since the no-show?',a:[
-          {t:'Rep made no attempt to reconnect',to:{q:'Why did the rep not attempt a reschedule?',a:[
-            {t:'Lead deprioritised vs newer leads',root:'Reschedule deprioritised — rep prioritisation gap'},
+          {t:'LRM made no attempt to reconnect',to:{q:'Why did the LRM not attempt a reschedule?',a:[
+            {t:'Lead deprioritised vs newer leads',root:'Reschedule deprioritised — LRM prioritisation gap'},
             {t:'No task/reminder surfaced it',root:'No system reminder to reschedule after no-show'}]}},
           {t:'Customer stopped responding',root:'Customer unresponsive after no-show — no win-back cadence'}]}},
-        {t:'Rep missed / double-booked the slot',root:'Rep missed the confirmed meeting slot'},
+        {t:'LRM missed / double-booked the slot',root:'LRM missed the confirmed meeting slot'},
         {t:'It was never a genuine confirmation',root:'MCCH marked without real customer confirmation'}]}},
       {t:'The meeting happened but stage was not updated',to:{q:'Why was the stage not moved to MD after the meeting?',a:[
-        {t:'Rep forgot / deprioritised the update',to:{q:'Why was the stage update missed?',a:[
+        {t:'LRM forgot / deprioritised the update',to:{q:'Why was the stage update missed?',a:[
           {t:'No end-of-meeting update habit',root:'Meeting done, stage not updated — process discipline'},
           {t:'Unsure which stage applied',root:'Outcome logged incorrectly — stage-knowledge gap'}]}},
-        {t:'Outcome unclear, rep is waiting',root:'Ambiguous outcome — lead parked at MCCH'}]}},
+        {t:'Outcome unclear, LRM is waiting',root:'Ambiguous outcome — lead parked at MCCH'}]}},
       {t:'Customer postponed the meeting',to:{q:'Why was a fresh meeting date not captured?',a:[
         {t:'No new date taken at postponement',root:'Postponed with no fresh MCCH date set'},
         {t:'Customer went cold after postponing',root:'Postponed then unresponsive — no follow-up cadence'}]}}]};},
   followup_missed:l=>{const d=l.days||0;return{
-    q:d>0?('The follow-up is '+d+' day'+(d===1?'':'s')+' overdue with no attempt logged. Why was it not made?'):'The follow-up is due today and no attempt is logged yet. Why has the rep not connected?',
+    q:d>0?('The follow-up is '+d+' day'+(d===1?'':'s')+' overdue with no attempt logged. Why was it not made?'):'The follow-up is due today and no attempt is logged yet. Why has the LRM not connected?',
     a:[
-      {t:'Rep made no attempt to contact',to:{q:'Why was no attempt made?',a:[
+      {t:'LRM made no attempt to contact',to:{q:'Why was no attempt made?',a:[
         {t:'Lead slipped out of the day plan',to:{q:'Why did it slip out of the plan?',a:[
           {t:'No task/reminder surfaced it',root:'No reminder surfaced the due follow-up'},
-          {t:'Too many leads, ran out of time',root:'Rep capacity exceeded — follow-up not reached'}]}},
-        {t:'Rep chose to prioritise other leads',root:'Follow-up deprioritised vs other leads'}]}},
-      {t:'Rep tried but could not reach the customer',to:{q:'Why was the attempt not logged or a new date not set?',a:[
+          {t:'Too many leads, ran out of time',root:'LRM capacity exceeded — follow-up not reached'}]}},
+        {t:'LRM chose to prioritise other leads',root:'Follow-up deprioritised vs other leads'}]}},
+      {t:'LRM tried but could not reach the customer',to:{q:'Why was the attempt not logged or a new date not set?',a:[
         {t:'Attempt made but not logged in CRM',root:'Contact attempted but not logged (data gap)'},
         {t:'Reached, but no new follow-up date set',root:'No fresh follow-up date set after contact'}]}},
       {t:'The follow-up date was stale / wrong',to:{q:'Why was the follow-up date not honoured?',a:[
         {t:'Date set by default, no real commitment',root:'Follow-up date set without real commitment'},
-        {t:'Reassigned rep never picked it up',root:'Reassigned lead not actioned by new rep'}]}}]};},
+        {t:'Reassigned LRM never picked it up',root:'Reassigned lead not actioned by new LRM'}]}}]};},
   not_interested:l=>({
     q:l.sit==='met'?'This lead was marked Not Interested after a meeting was confirmed. Why was it closed as NI?':'This lead was marked Not Interested before any meeting (MD). Why was it closed this early?',
     a:[
       {t:'The real objection was not handled',to:{q:'Why was the objection not handled?',a:[
         {t:'Objection was not captured / logged',to:{q:'Why was the objection not captured?',a:[
-          {t:'Rep did not probe the reason',root:'Objection not probed — discovery gap'},
+          {t:'LRM did not probe the reason',root:'Objection not probed — discovery gap'},
           {t:'Captured verbally, never logged',root:'Objection handled but not logged (data gap)'}]}},
-        {t:'Rep had no rebuttal / offer',root:'Objection known but no rebuttal attempted'}]}},
+        {t:'LRM had no rebuttal / offer',root:'Objection known but no rebuttal attempted'}]}},
       {t:'Closed too early — before a real pitch',to:{q:'Why was it closed before MD?',a:[
-        {t:'Rep judged low intent quickly',root:'Premature close — intent misjudged, no MD'},
+        {t:'LRM judged low intent quickly',root:'Premature close — intent misjudged, no MD'},
         {t:'Pressure to clear the pipeline',root:'Pipeline-hygiene pressure — closed prematurely'}]}},
       {t:'Genuinely not interested, but no win-back',to:{q:'Why was there no win-back attempt?',a:[
         {t:'No win-back cadence exists',root:'Valid NI but no win-back attempt'},
@@ -101,35 +101,35 @@ const WHYS={
     q:l.sit==='disc'?'This lead was marked Not Qualified after a discovery call. Why does it not qualify?':'This lead was marked Not Qualified with no discovery call logged. Why was it disqualified without discovery?',
     a:[
       {t:'No discovery call actually happened',to:{q:'Why was there no discovery call?',a:[
-        {t:'Rep disqualified on assumption',root:'Disqualified on assumption — no discovery call'},
+        {t:'LRM disqualified on assumption',root:'Disqualified on assumption — no discovery call'},
         {t:'Could not reach customer to qualify',to:{q:'Why was reaching the customer not retried?',a:[
           {t:'No retry cadence attempted',root:'Unreachable for discovery — no retry cadence'},
           {t:'Wrong / bad contact details',root:'Bad contact data — could not qualify'}]}}]}},
       {t:'The DQ criteria do not really apply',to:{q:'Why were the criteria mis-applied?',a:[
-        {t:'Criteria misunderstood by rep',root:'DQ criteria misunderstood — training gap'},
+        {t:'Criteria misunderstood by LRM',root:'DQ criteria misunderstood — training gap'},
         {t:'Reason code missing / wrong',root:'DQ reason code missing or incorrect'}]}},
       {t:'It qualifies but was closed anyway',root:'Reopen candidate — lead actually qualifies'}]}),
   mcch_future:l=>({
     q:'A meeting is confirmed for an upcoming date but the entry is flagged. Why is this MCCH not clean?',
     a:[
       {t:'Customer confirmation is not logged',to:{q:'Why is the confirmation missing?',a:[
-        {t:'Rep set MCCH without customer OK',root:'MCCH set without customer confirmation'},
+        {t:'LRM set MCCH without customer OK',root:'MCCH set without customer confirmation'},
         {t:'Confirmed verbally, not recorded',root:'Customer confirmed but not logged (data gap)'}]}},
       {t:'The slot is beyond the D+2 window',to:{q:'Why was the slot booked so far out?',a:[
         {t:'Customer only available later',root:'Slot beyond D+2 — customer availability'},
-        {t:'Rep pushed the slot to manage load',root:'Slot beyond D+2 — rep scheduling to ease load'}]}},
+        {t:'LRM pushed the slot to manage load',root:'Slot beyond D+2 — LRM scheduling to ease load'}]}},
       {t:'Prep note was not sent',to:{q:'Why was prep not done?',a:[
-        {t:'No prep step in the rep routine',root:'No meeting-prep note sent to customer'},
+        {t:'No prep step in the LRM routine',root:'No meeting-prep note sent to customer'},
         {t:'Held / duplicate slot',root:'Held or duplicate slot — needs cleanup'}]}}]}),
 };
 // pre-submitted RCAs awaiting the auditor's review (cross-team, illustrative)
 const RCA_SEEDS=[
- {id:'s1',lead:'Rohan Gupta',rep:'Tejal Pakhale',tl:'Amit Jaiswar',cat:'followup_missed',rca:'No new follow-up date set',action:'Ask rep to call today',sev:'high',when:'25 min ago'},
- {id:'s2',lead:'Priya Nair',rep:'Akshada Tribhuwan',tl:'Amit Jaiswar',cat:'not_interested',rca:'No reason / objection logged',action:'Re-open the lead',sev:'med',when:'1h ago'},
- {id:'s3',lead:'Rohit Sethi',rep:'Khushi Piplewar',tl:'Unnati Dahikar',cat:'not_qualified',rca:'No discovery call logged',action:'Re-open the lead',sev:'high',when:'2h ago'},
- {id:'s4',lead:'Manish Kulkarni',rep:'Uday Jain',tl:'Unnati Dahikar',cat:'mcch_future',rca:'Customer confirmation not logged',action:'No action needed',sev:'low',when:'3h ago'},
- {id:'s5',lead:'Farah Khan',rep:'Megha Rai',tl:'Prabhat Samal',cat:'followup_missed',rca:'Reassigned but not actioned',action:'Reassign to another rep',sev:'med',when:'Yesterday'},
- {id:'s6',lead:'Nikhil Jain',rep:'Saloni Singh',tl:'Prabhat Samal',cat:'not_interested',rca:'Closed before MD (too early)',action:'Escalate to manager',sev:'high',when:'Yesterday'},
+ {id:'s1',lead:'Rohan Gupta',LRM:'Tejal Pakhale',tl:'Amit Jaiswar',cat:'followup_missed',rca:'No new follow-up date set',action:'Ask LRM to call today',sev:'high',when:'25 min ago'},
+ {id:'s2',lead:'Priya Nair',LRM:'Akshada Tribhuwan',tl:'Amit Jaiswar',cat:'not_interested',rca:'No reason / objection logged',action:'Re-open the lead',sev:'med',when:'1h ago'},
+ {id:'s3',lead:'Rohit Sethi',LRM:'Khushi Piplewar',tl:'Unnati Dahikar',cat:'not_qualified',rca:'No discovery call logged',action:'Re-open the lead',sev:'high',when:'2h ago'},
+ {id:'s4',lead:'Manish Kulkarni',LRM:'Uday Jain',tl:'Unnati Dahikar',cat:'mcch_future',rca:'Customer confirmation not logged',action:'No action needed',sev:'low',when:'3h ago'},
+ {id:'s5',lead:'Farah Khan',LRM:'Megha Rai',tl:'Prabhat Samal',cat:'followup_missed',rca:'Reassigned but not actioned',action:'Reassign to another LRM',sev:'med',when:'Yesterday'},
+ {id:'s6',lead:'Nikhil Jain',LRM:'Saloni Singh',tl:'Prabhat Samal',cat:'not_interested',rca:'Closed before MD (too early)',action:'Escalate to manager',sev:'high',when:'Yesterday'},
 ];
 const DEFAULT_AUDITORS=['quality.desk@solarsquare.in'];
 const ADMIN_FALLBACK=['analytics.sse@solarsquare.in'];
@@ -142,9 +142,13 @@ const norm=e=>String(e||'').trim().toLowerCase().replace('@homes.solarsquare.in'
 const ini2=n=>{const p=String(n||'').trim().split(/\s+/);return((p[0]&&p[0][0]||'')+(p[1]&&p[1][0]||'')).toUpperCase();};
 const first1=n=>String(n||'').split(' ')[0];
 const fmtD=iso=>{if(!iso)return'';const d=new Date(iso);return isNaN(d)?'':d.getDate()+' '+MON[d.getMonth()];};
+const fmtDT=iso=>{if(!iso)return'\u2014';const d=new Date(iso);if(isNaN(d))return'\u2014';let h=d.getHours(),m=String(d.getMinutes()).padStart(2,'0'),ap=h<12?'AM':'PM';h=h%12||12;return d.getDate()+' '+MON[d.getMonth()]+', '+h+':'+m+' '+ap;};
+const ACTLBL={call:'Call logged',stage_change:'Stage changed',meeting_done:'Meeting marked done',followup_set:'Follow-up set',crm_touch:'CRM record edited',none:'No activity ever recorded'};
+const LEAKLBL={L1:'Meeting date passed, nothing since',L2:'Marked CNC, never re-dialled',L3:'Call-later loop turning, no close',L4:'Closed with no connected call',L4b:'Closed \u2014 check the reason',L0:'Watch only'};
+const silentLbl=l=>{if(l.lastAt==null)return'never touched';const h=l.hoursSilent||0;if(h<24)return h<=1?'active this hour':h+'h silent';return (l.silent||Math.round(h/24))+'d silent';};
 const catObj=k=>CATS.find(c=>c.key===k);
 
-const S={screen:'queue',tlEmail:null,catKey:'mcch_past',selId:null,audits:{},rcaReview:{},showRules:false,model:null,src:'demo',role:'demo',user:null,meEmail:null,hier:[],rcaAuditors:null,newAuditor:'',dirQ:''};
+const S={screen:'queue',recs:{},recBusy:null,tlEmail:null,catKey:'mcch_past',selId:null,audits:{},rcaReview:{},showRules:false,model:null,src:'demo',role:'demo',user:null,meEmail:null,hier:[],rcaAuditors:null,newAuditor:'',dirQ:''};
 
 const AUTH={enabled:true,ready:false,clientId:'',domain:'solarsquare.in',admins:[]};
 const LOGO_SRC='https://cdn.solarsquare.in/blog/wp-content/uploads/2025/11/05101757/logo.webp';
@@ -169,7 +173,7 @@ async function renderGoogleBtn(el){
     google.accounts.id.initialize({client_id:AUTH.clientId,callback:handleCredential,hd:AUTH.domain,
       error_callback:e=>{authMsg('Google rejected sign-in: <b>'+esc((e&&(e.type||e.message))||'unknown')+'</b>. If this says <i>origin</i>, this site\u2019s URL must be added to the OAuth client\u2019s <b>Authorized JavaScript origins</b> in Google Cloud Console.');}});
     el.innerHTML='';
-    google.accounts.id.renderButton(el,{theme:'outline',size:'large',shape:'pill',text:'signin_with',width:288});
+    google.accounts.id.renderButton(el,{theme:'outline',size:'large',shape:'rectangular',text:'signin_with',logo_alignment:'center',width:360});
     google.accounts.id.prompt(n=>{if(n&&n.isSkippedMoment&&n.isSkippedMoment()){/* one-tap skipped; button still works */}});
   }catch(err){authMsg('Sign-in init failed: <b>'+esc(String(err&&err.message||err))+'</b>');}
 }
@@ -182,24 +186,29 @@ function loginView(denied,reason){
   const em=denied&&readSession()?esc(readSession().email):'';
   const rmap={'not-signed-in':'Your session expired. Sign in again.','invalid-token':'Your sign-in expired (tokens last ~1 hour). Sign in again.','wrong-audience':'Server GOOGLE_CLIENT_ID doesn\u2019t match the one issuing your login — the two client IDs must be identical.','wrong-domain':'That account isn\u2019t on the allowed Workspace domain.','not-authorized':'Your email isn\u2019t on the ALLOWED_EMAILS allowlist. Ask an admin to add you.','email-unverified':'Your Google email isn\u2019t verified.'};
   const rmsg=reason?(rmap[reason]||('Server said: '+esc(reason))):'';
-  document.getElementById('app').innerHTML=`<div class="wrap" style="min-height:100vh;display:grid;place-items:center">
-    <div style="max-width:400px;text-align:center;display:flex;flex-direction:column;align-items:center;gap:20px;padding:40px 0">
-      ${logoImg(34)}
-      <div style="display:flex;align-items:center;gap:11px;font-family:var(--font-heading);font-size:24px"><span style="width:32px;height:32px;border-radius:999px;background:var(--color-accent);display:grid;place-items:center"><span style="width:13px;height:13px;border-radius:999px;border:3px solid var(--color-bg)"></span></span>Lead Sentinel</div>
-      <div style="font-size:14px;line-height:1.6;color:${MUT(62)}">${denied?`<b>${em}</b> isn't authorised for Lead Sentinel.<br>Sign in with a mapped TL / manager account, or ask an admin for access.`:'Conversion-desk audit tool. Sign in with your SolarSquare account to continue.'}</div>
-      <div id="gbtn" style="min-height:44px;display:grid;place-items:center"></div>
-      <div id="autherr" style="font-size:12.5px;line-height:1.55;color:var(--color-accent-2-700);max-width:340px">${rmsg}</div>
-      ${denied?`<button class="btn btn-secondary" onclick="signOut()" style="font-size:12.5px">Use a different account</button>`:''}
-      <div style="font-size:11.5px;color:${MUT(45)}">Access is restricted to @${esc(AUTH.domain)} accounts.</div>
+  document.getElementById('app').innerHTML=`<div style="min-height:100vh;display:grid;place-items:center;padding:40px 24px">
+    <div style="width:100%;max-width:460px;display:flex;flex-direction:column;align-items:center;text-align:center">
+      <div style="margin-bottom:36px">${logoImg(52)}</div>
+      <div style="display:flex;align-items:center;gap:16px;margin-bottom:14px">
+        <span style="width:52px;height:52px;flex:none;border-radius:999px;background:var(--color-accent);display:grid;place-items:center"><span style="width:21px;height:21px;border-radius:999px;border:5px solid var(--color-bg)"></span></span>
+        <span style="font-family:var(--font-heading);font-size:44px;line-height:1;letter-spacing:-.015em">Lead Sentinel</span>
+      </div>
+      <div style="font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:${MUT(42)};margin-bottom:28px">Conversion Desk · Audit</div>
+      <div style="width:56px;height:1px;background:${MUT(18)};margin-bottom:28px"></div>
+      <div style="font-size:15px;line-height:1.6;color:${MUT(62)};max-width:36ch;margin-bottom:32px">${denied?`<b>${em}</b> isn't authorised for Lead Sentinel.<br>Sign in with a mapped TL or manager account, or ask an admin for access.`:'Sign in with your SolarSquare account to open today’s audit queue.'}</div>
+      <div id="gbtn" style="min-height:48px;display:grid;place-items:center;width:100%"></div>
+      <div id="autherr" style="font-size:12.5px;line-height:1.55;color:var(--color-accent-2-700);max-width:360px;margin-top:16px">${rmsg}</div>
+      ${denied?`<button class="btn btn-secondary" onclick="signOut()" style="font-size:12.5px;margin-top:16px">Use a different account</button>`:''}
+      <div style="font-size:12px;color:${MUT(42)};margin-top:36px">Restricted to @${esc(AUTH.domain)} accounts</div>
     </div></div>`;
   renderGoogleBtn(document.getElementById('gbtn'));
 }
 
 function genDemo(){
   const T=[
-    {tl:'amit.jaiswar@solarsquare.in',tn:'Amit Jaiswar',z:'nidhi.m@solarsquare.in',a:'noor.alam@solarsquare.in',cl:'Pune',reps:[['Sakshi Jadhav','sakshi.jadhav'],['Tejal Pakhale','tejal.p'],['Akshada Tribhuwan','akshada.t'],['Manasi Jagtap','manasi.jagtap'],['Gaurav Nagpure','gaurav.nagpure'],['Poonam Yadav','poonam.yadav']],ar:['Wakad','Baner','Kothrud','Bavdhan','Aundh','Hinjewadi']},
-    {tl:'unnati.dahikar@solarsquare.in',tn:'Unnati Dahikar',z:'anurag.jaiswal@solarsquare.in',a:'anurag.mishra@solarsquare.in',cl:'Indore',reps:[['Khushi Piplewar','khushi.piplewar'],['Kalpesh Chachare','kalpesh.chachare'],['Uday Jain','uday.jain'],['Jayesh Chouhan','jayesh.chouhan']],ar:['Vijay Nagar','Palasia','Rau','Rajwada']},
-    {tl:'prabhat.samal@solarsquare.in',tn:'Prabhat Samal',z:'meenu.k@solarsquare.in',a:'deepanshi.s@solarsquare.in',cl:'Lucknow',reps:[['Vrunda Jagtap','vrunda.jagtap'],['Megha Rai','megha.rai'],['Saloni Singh','saloni.singh'],['Ashutosh Mittal','ashutosh.mittal']],ar:['Gomti Nagar','Aliganj','Indira Nagar','Alambagh']},
+    {tl:'amit.jaiswar@solarsquare.in',tn:'Amit Jaiswar',z:'nidhi.m@solarsquare.in',a:'noor.alam@solarsquare.in',cl:'Pune',LRMs:[['Sakshi Jadhav','sakshi.jadhav'],['Tejal Pakhale','tejal.p'],['Akshada Tribhuwan','akshada.t'],['Manasi Jagtap','manasi.jagtap'],['Gaurav Nagpure','gaurav.nagpure'],['Poonam Yadav','poonam.yadav']],ar:['Wakad','Baner','Kothrud','Bavdhan','Aundh','Hinjewadi']},
+    {tl:'unnati.dahikar@solarsquare.in',tn:'Unnati Dahikar',z:'anurag.jaiswal@solarsquare.in',a:'anurag.mishra@solarsquare.in',cl:'Indore',LRMs:[['Khushi Piplewar','khushi.piplewar'],['Kalpesh Chachare','kalpesh.chachare'],['Uday Jain','uday.jain'],['Jayesh Chouhan','jayesh.chouhan']],ar:['Vijay Nagar','Palasia','Rau','Rajwada']},
+    {tl:'prabhat.samal@solarsquare.in',tn:'Prabhat Samal',z:'meenu.k@solarsquare.in',a:'deepanshi.s@solarsquare.in',cl:'Lucknow',LRMs:[['Vrunda Jagtap','vrunda.jagtap'],['Megha Rai','megha.rai'],['Saloni Singh','saloni.singh'],['Ashutosh Mittal','ashutosh.mittal']],ar:['Gomti Nagar','Aliganj','Indira Nagar','Alambagh']},
   ];
   const cats=['mcch_past','followup_missed','not_interested','not_qualified','mcch_future'];
   const fn=['Meera','Vikram','Karan','Deepa','Anita','Sneha','Rohan','Farah','Priya','Sameer','Nikhil','Ritu','Rohit','Alok','Tanvi','Imran','Ananya','Manish','Pooja','Arjun'];
@@ -207,9 +216,9 @@ function genDemo(){
   const iso=da=>{const d=new Date('2026-07-25T00:00:00+05:30');d.setDate(d.getDate()-da);return d.toISOString();};
   const isoF=da=>{const d=new Date('2026-07-25T00:00:00+05:30');d.setDate(d.getDate()+da);return d.toISOString();};
   let seq=50200;const queue=[],hierarchy=[];
-  T.forEach(t=>{t.reps.forEach(r=>hierarchy.push({rep_email:r[1]+'@solarsquare.in',rep_name:r[0],cluster:t.cl,tl_email:t.tl,tl_name:t.tn,zsm_email:t.z,ados_email:t.a,hr_status:'Active'}));
-    let li=0;cats.forEach(cat=>{for(let k=0;k<4;k++){const rp=t.reps[li%t.reps.length];li++;const area=t.ar[(li+k)%t.ar.length];
-      const row={audit_date:'2026-07-25',rep_name:rp[0],rep_email:rp[1]+'@solarsquare.in',lead_id:'RMH'+(seq++),customer_name:fn[(seq+k)%fn.length]+' '+ln[(seq*2+k)%ln.length],cluster:area,lead_stage:'',category:cat,created_at:iso(14+((li+k)%10)),meeting_confirmed_at:null,meeting_schedule_date:null,meeting_done_date:null,follow_up_at:null,qualified_at:null,status_changed_at:null,attempt_today:false,days_overdue:0};
+  T.forEach(t=>{t.LRMs.forEach(r=>hierarchy.push({lrm_email:r[1]+'@solarsquare.in',lrm_name:r[0],cluster:t.cl,tl_email:t.tl,tl_name:t.tn,zsm_email:t.z,ados_email:t.a,hr_status:'Active'}));
+    let li=0;cats.forEach(cat=>{for(let k=0;k<4;k++){const rp=t.LRMs[li%t.LRMs.length];li++;const area=t.ar[(li+k)%t.ar.length];
+      const row={audit_date:'2026-07-25',lrm_name:rp[0],lrm_email:rp[1]+'@solarsquare.in',lead_id:'RMH'+(seq++),customer_name:fn[(seq+k)%fn.length]+' '+ln[(seq*2+k)%ln.length],cluster:area,lead_stage:'',category:cat,created_at:iso(14+((li+k)%10)),meeting_confirmed_at:null,meeting_schedule_date:null,meeting_done_date:null,follow_up_at:null,qualified_at:null,status_changed_at:null,attempt_today:false,days_overdue:0};
       if(cat==='mcch_past'){const od=1+((k+li)%5);row.meeting_confirmed_at=iso(od+4);row.meeting_schedule_date=iso(od);row.days_overdue=od;}
       else if(cat==='mcch_future'){row.meeting_confirmed_at=iso(1);row.meeting_schedule_date=isoF(1+((k+li)%4));}
       else if(cat==='followup_missed'){const od=(k+li)%5;row.follow_up_at=iso(od);row.days_overdue=od;}
@@ -245,29 +254,42 @@ async function load(){
 }
 
 function buildModel(queue,hier){
-  const H={};hier.forEach(h=>H[norm(h.rep_email)]=h);
+  const H={};hier.forEach(h=>H[norm(h.lrm_email)]=h);
   const base={mcch_past:45,followup_missed:40,not_interested:52,not_qualified:52,mcch_future:34};
   const leadsByTl={},tlMeta={};
   queue.forEach(row=>{
-    const h=H[norm(row.rep_email)]||{};const tl=h.tl_email||'unassigned';
+    const h=H[norm(row.lrm_email)]||{};const tl=h.tl_email||'unassigned';
     const urg=Math.max(20,Math.min(100,base[row.category]+(row.days_overdue||0)*8));
-    const lead={id:row.lead_id,cat:row.category,name:row.customer_name,loc:row.cluster,
-      meta:(row.cluster||'')+' · '+row.lead_id,rep:row.rep_name,ini:ini2(row.customer_name),repIni:ini2(row.rep_name),
+    const cname=row.customer_name||('Lead '+row.lead_id);
+    const lead={id:row.lead_id,cat:row.category,name:cname,loc:row.cluster,
+      meta:(row.cluster||'')+' · '+row.lead_id,LRM:row.lrm_name,ini:ini2(row.customer_name||row.lrm_name||'NA'),lrmIni:ini2(row.lrm_name),
       urg:urg,days:row.days_overdue||0,tlEmail:tl,tlName:h.tl_name||'Unassigned',
+      key:Number(row.priority_key)||0,rank:row.category_rank||99,slot:'primary',
       timeline:buildTL(row),systemNote:buildNote(row),
+      lastAt:row.last_activity_at||null,lastType:row.last_activity_type||'',
+      silent:Number(row.days_silent)||0,hoursSilent:Number(row.hours_silent)||0,
+      calls30:Number(row.calls_30d)||0,connects30:Number(row.connects_30d)||0,leak:row.leak_code||'',
       sit:row.category==='not_interested'?(row.meeting_confirmed_at?'met':'early'):row.category==='not_qualified'?(row.qualified_at?'disc':'nodisc'):row.category==='followup_missed'?((row.days_overdue||0)>0?'overdue':'today'):''};
     (leadsByTl[tl]=leadsByTl[tl]||[]).push(lead);
     tlMeta[tl]=tlMeta[tl]||{name:h.tl_name||'Unassigned',ini:ini2(h.tl_name||'NA'),cluster:h.cluster||row.cluster};
   });
-  // Daily pick: each TL sees at most 20 leads — top 4 per category by breach urgency.
-  Object.keys(leadsByTl).forEach(tl=>{const byCat={};leadsByTl[tl].forEach(l=>(byCat[l.cat]=byCat[l.cat]||[]).push(l));let keep=[];CATS.forEach(c=>{keep=keep.concat((byCat[c.key]||[]).slice().sort((a,b)=>(b.urg-a.urg)||(b.days-a.days)).slice(0,4));});leadsByTl[tl]=keep;});
-  const repsByTl={},repRiskByTl={};
+  // Daily pick, per TL: 4 per category pooled across ALL of that TL's LRMs, then top up to
+  // 20 from the leftovers (most overdue first) if any category came up short.
   Object.keys(leadsByTl).forEach(tl=>{
-    const ls=leadsByTl[tl],byRep={};
-    ls.forEach(l=>{(byRep[l.rep]=byRep[l.rep]||{name:l.rep,ini:l.repIni,cats:{}}).cats[l.cat]=(byRep[l.rep].cats[l.cat]||0)+1;});
-    const reps=Object.values(byRep).map(r=>{const trend=CATS.map(c=>r.cats[c.key]||0);return{name:r.name,ini:r.ini,trend,flagged:trend.reduce((a,b)=>a+b,0)};});
-    const mx=Math.max(1,...reps.map(r=>r.flagged));const rr={};reps.forEach(r=>rr[r.name]=Math.min(100,Math.round(r.flagged/mx*100)));
-    repsByTl[tl]=reps;repRiskByTl[tl]=rr;
+    const byCat={};leadsByTl[tl].forEach(l=>(byCat[l.cat]=byCat[l.cat]||[]).push(l));
+    const rank=(a,b)=>(b.key-a.key)||(b.urg-a.urg)||(b.days-a.days);
+    let keep=[],rest=[];
+    CATS.forEach(c=>{const pool=(byCat[c.key]||[]).slice().sort(rank);keep=keep.concat(pool.slice(0,4));rest=rest.concat(pool.slice(4));});
+    if(keep.length<20)rest.sort((a,b)=>(b.days-a.days)||rank(a,b)).slice(0,20-keep.length).forEach(l=>keep.push({...l,slot:'backfill'}));
+    leadsByTl[tl]=keep;
+  });
+  const lrmsByTl={},lrmRiskByTl={};
+  Object.keys(leadsByTl).forEach(tl=>{
+    const ls=leadsByTl[tl],byLrm={};
+    ls.forEach(l=>{(byLrm[l.LRM]=byLrm[l.LRM]||{name:l.LRM,ini:l.lrmIni,cats:{}}).cats[l.cat]=(byLrm[l.LRM].cats[l.cat]||0)+1;});
+    const LRMs=Object.values(byLrm).map(r=>{const trend=CATS.map(c=>r.cats[c.key]||0);return{name:r.name,ini:r.ini,trend,flagged:trend.reduce((a,b)=>a+b,0)};});
+    const mx=Math.max(1,...LRMs.map(r=>r.flagged));const rr={};LRMs.forEach(r=>rr[r.name]=Math.min(100,Math.round(r.flagged/mx*100)));
+    lrmsByTl[tl]=LRMs;lrmRiskByTl[tl]=rr;
   });
   const busiest=Object.keys(leadsByTl).sort((a,b)=>leadsByTl[b].length-leadsByTl[a].length)[0];
   const meTl=(S.meEmail&&leadsByTl[S.meEmail])?S.meEmail:null;
@@ -275,7 +297,7 @@ function buildModel(queue,hier){
   const tls=Object.keys(leadsByTl).map((tl,i)=>{const ls=leadsByTl[tl],m=tlMeta[tl],od=ls.filter(l=>l.days>2).length;
     return{email:tl,name:m.name,ini:m.ini,cluster:m.cluster,total:ls.length,me:tl===meTl,
       simAudited:tl===curTl?null:Math.max(0,ls.length-(i%3)),simDev:tl===curTl?null:od,simHigh:tl===curTl?null:Math.round(od/2),topGap:topCat(ls)};});
-  S.model={leadsByTl,repsByTl,repRiskByTl,tls,curTl};S.tlEmail=curTl;S.hier=hier||[];
+  S.model={leadsByTl,lrmsByTl,lrmRiskByTl,tls,curTl};S.tlEmail=curTl;S.hier=hier||[];
   const first=(leadsByTl[curTl].filter(l=>l.cat==='mcch_past').sort((a,b)=>b.urg-a.urg)[0]||leadsByTl[curTl][0]||{});
   S.selId=first.id;
 }
@@ -288,21 +310,22 @@ function buildTL(row){const t=[],p=(iso,w,k)=>t.push({when:fmtD(iso),what:w,kind
   else if(row.category==='not_interested'){if(row.meeting_confirmed_at)p(row.meeting_confirmed_at,'MCCH set','done');p(row.status_changed_at,'Marked NI','flag');}
   else if(row.category==='not_qualified'){if(row.qualified_at)p(row.qualified_at,'Discovery','done');p(row.status_changed_at,'Marked NQ','flag');}
   return t;}
-function buildNote(row){const d=row.days_overdue||0;
-  if(row.category==='mcch_past')return'MCCH date '+fmtD(row.meeting_schedule_date)+' passed '+d+'d ago — still at MCCH, not moved to MD.';
-  if(row.category==='mcch_future')return'Meeting confirmed for '+fmtD(row.meeting_schedule_date)+' — verify customer confirmation logged and slot within window.';
-  if(row.category==='followup_missed')return'Follow-up '+(d?('overdue '+d+'d — due '+fmtD(row.follow_up_at)):'due today ('+fmtD(row.follow_up_at)+')')+' — no connect attempt logged today.';
-  if(row.category==='not_interested')return'Marked Not Interested on '+fmtD(row.status_changed_at)+(row.meeting_confirmed_at?' — confirm the objection was captured.':' — closed before any meeting.');
-  if(row.category==='not_qualified')return'Marked Not Qualified on '+fmtD(row.status_changed_at)+(row.qualified_at?' after a discovery call.':' — no discovery call logged.');
+function buildNote(row){const d=row.days_overdue||0;const s=Number(row.days_silent)||0;
+  const quiet=row.last_activity_at?(s>0?' Nothing logged on the lead for '+s+' day'+(s===1?'':'s')+'.':' Last touched today.'):' No activity ever logged.';
+  if(row.category==='mcch_past')return'MCCH date '+fmtD(row.meeting_schedule_date)+' passed '+d+'d ago — still at MCCH, not moved to MD.'+quiet;
+  if(row.category==='mcch_future')return'Meeting confirmed for '+fmtD(row.meeting_schedule_date)+' — verify customer confirmation logged and slot within window.'+quiet;
+  if(row.category==='followup_missed')return'Follow-up '+(d?('overdue '+d+'d — due '+fmtD(row.follow_up_at)):'due today ('+fmtD(row.follow_up_at)+')')+' — '+(Number(row.calls_30d)||0)+' dial'+((Number(row.calls_30d)||0)===1?'':'s')+' in 30d.'+quiet;
+  if(row.category==='not_interested')return'Marked Not Interested on '+fmtD(row.status_changed_at)+(row.meeting_confirmed_at?' — confirm the objection was captured.':' — closed before any meeting.')+quiet;
+  if(row.category==='not_qualified')return'Marked Not Qualified on '+fmtD(row.status_changed_at)+(row.qualified_at?' after a discovery call.':' — no discovery call logged.')+quiet;
   return'';}
 
 // ---- data accessors ----
 const L=()=>S.model?(S.model.leadsByTl[S.tlEmail]||[]):[];
-const R=()=>S.model?(S.model.repsByTl[S.tlEmail]||[]):[];
+const R=()=>S.model?(S.model.lrmsByTl[S.tlEmail]||[]):[];
 const TLS=()=>S.model?S.model.tls:[];
-function repRisk(rep){const m=S.model;if(!m)return 50;const map=m.repRiskByTl[S.tlEmail]||{};return map[rep]!=null?map[rep]:50;}
+function repRisk(LRM){const m=S.model;if(!m)return 50;const map=m.lrmRiskByTl[S.tlEmail]||{};return map[LRM]!=null?map[LRM]:50;}
 function prio(id){const lead=L().find(l=>l.id===id);if(!lead)return{score:0,tier:'P3',urg:0,repRisk:0};
-  const rr=repRisk(lead.rep),u=lead.urg||0,score=Math.round(0.6*u+0.4*rr);
+  const rr=repRisk(lead.LRM),u=lead.urg||0,score=Math.round(0.6*u+0.4*rr);
   return{score,tier:score>=70?'P1':score>=55?'P2':'P3',urg:u,repRisk:rr};}
 function catLeads(k){return L().filter(l=>l.cat===k).slice().sort((a,b)=>prio(b.id).score-prio(a.id).score);}
 const rcaDone=id=>!!(S.audits[id]&&S.audits[id].reason);
@@ -345,9 +368,9 @@ function queueView(){
     return `<button class="btn" data-act="cat" data-v="${c.key}" style="padding:8px 14px;font-size:13px;${on?'background:var(--color-surface);border:1.5px solid var(--color-accent)':'background:transparent;border:1px solid var(--color-divider);color:'+MUT(78)}"><span style="width:10px;height:10px;border-radius:999px;background:${c.dot}"></span>${esc(c.name)}<span style="font-size:11px;font-weight:600;padding:1px 8px;border-radius:999px;background:${on?'var(--color-accent-200)':MUT(8)};color:${on?'var(--color-accent-800)':MUT(60)}">${d}/${dl.length}</span></button>`;}).join('');
   const dl=catLeads(S.catKey);
   const rows=dl.map(l=>{const lbl=rcaDone(l.id)?['RCA done','tag tag-accent-2']:['Pending','tag tag-neutral'],on=l.id===S.selId,p=prio(l.id);
-    return `<button data-act="lead" data-v="${l.id}" style="display:flex;align-items:center;gap:10px;width:100%;padding:11px 12px;border-radius:16px;cursor:pointer;text-align:left;${on?'background:var(--color-surface);border:1.5px solid var(--color-accent)':'background:color-mix(in srgb,var(--color-surface) 55%,transparent);border:1px solid var(--color-divider)'}">
-      <span style="display:flex;align-items:center;gap:11px;flex:1;min-width:0"><span style="width:34px;height:34px;flex:none;display:grid;place-items:center;border-radius:999px;background:var(--color-accent-200);color:var(--color-accent-800);font-size:12px;font-weight:700">${esc(l.repIni)}</span><span style="min-width:0;line-height:1.3"><span style="display:block;font-weight:600;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(l.name)}</span><span style="display:block;font-size:11.5px;color:${MUT(55)};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(l.loc)} · ${esc(l.rep)}</span></span></span>
-      <span style="display:flex;flex-direction:column;align-items:flex-end;gap:5px;flex:none"><span style="${tierStyle(p.tier,0)}">${p.tier}</span><span class="${lbl[1]}">${lbl[0]}</span></span></button>`;}).join('');
+    return `<button data-act="lead" data-v="${l.id}" style="display:flex;align-items:center;gap:10px;width:100%;padding:12px 10px;border:none;border-bottom:1px solid var(--color-divider);border-radius:0;cursor:pointer;text-align:left;${on?'background:var(--color-surface);box-shadow:inset 2px 0 0 var(--color-accent)':'background:transparent'}">
+      <span style="min-width:0;flex:1;line-height:1.35"><span style="display:block;font-weight:600;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(l.name)}</span><span style="display:block;font-size:11.5px;color:${MUT(55)};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(l.LRM)} · ${esc(silentLbl(l))}</span></span>
+      <span style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex:none"><span style="font-size:10.5px;font-weight:700;color:${p.tier==='P1'?'var(--color-accent-800)':MUT(45)}">${p.tier}</span>${done0(l)?`<span style="font-size:10.5px;color:${MUT(40)}">done</span>`:''}</span></button>`;}).join('');
   return `<div class="wrap" style="padding-bottom:44px;animation:lsfade .25s ease">
     <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:24px;flex-wrap:wrap;padding:14px 0 18px">
       <div><h2 style="margin:0;font-size:30px">Breach RCA queue</h2><div style="font-size:13.5px;color:${MUT(60)}">Friday, 25 Jul 2026 · confirmed breaches from the last 30 days · ${total} leads across 5 categories awaiting root-cause analysis</div></div>
@@ -357,7 +380,7 @@ function queueView(){
       ${S.showRules?`<div class="card elev-sm" style="margin-top:12px;padding:20px 22px"><div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px">${RULES.map(s=>`<div style="display:flex;flex-direction:column;gap:7px"><span style="display:flex;align-items:center;gap:9px"><span style="width:24px;height:24px;display:grid;place-items:center;border-radius:999px;background:var(--color-accent-2);color:var(--color-bg);font-size:12px;font-weight:700">${s[0]}</span><span style="font-weight:700;font-size:13.5px">${s[1]}</span></span><span style="font-size:12px;line-height:1.5;color:${MUT(68)}">${s[2]}</span></div>`).join('')}</div></div>`:''}</div>
     <div style="display:flex;gap:10px;flex-wrap:wrap;padding-bottom:18px">${tabs}</div>
     <div style="display:grid;grid-template-columns:296px 1fr;gap:22px;align-items:start">
-      <div style="display:flex;flex-direction:column;gap:12px"><div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:${MUT(55)};padding-left:2px">${esc(catObj(S.catKey).name)} · ${dl.length} leads</div>${rows}</div>
+      <div style="display:flex;flex-direction:column;gap:0"><div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:${MUT(45)};padding:0 0 8px 10px">${esc(catObj(S.catKey).name)} · ${dl.length}</div>${rows}</div>
       ${auditPanel()}
     </div></div>`;
 }
@@ -375,6 +398,61 @@ function whyBlockHtml(l){
   }
   return h;
 }
+const done0=l=>rcaDone(l.id);
+
+// ---- latest activity ----
+function activityBlock(l){
+  const t=ACTLBL[l.lastType]||'Activity';
+  const stale=(l.silent||0)>=3;
+  const cell=(k,v,sub,em)=>`<div style="min-width:0"><div style="font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:${MUT(45)};margin-bottom:4px">${k}</div><div style="font-size:14.5px;line-height:1.3;${em?'color:var(--color-accent-2-900);font-weight:600':''}">${v}</div>${sub?`<div style="font-size:11.5px;color:${MUT(50)};margin-top:2px">${sub}</div>`:''}</div>`;
+  return `<div style="display:grid;grid-template-columns:1.4fr 1fr 1fr;gap:22px;padding:16px 0;border-top:1px solid var(--color-divider);border-bottom:1px solid var(--color-divider)">
+    ${cell('Latest activity',esc(t),esc(fmtDT(l.lastAt)))}
+    ${cell('Silence',esc(silentLbl(l)),l.lastAt?'since last signal':'no signal on record',stale)}
+    ${cell('Dials · 30d',(l.calls30||0)+' <span style="color:'+MUT(40)+'">/</span> '+(l.connects30||0)+'',(l.connects30||0)===0?'no connect ≥15s':'connected')}
+    <div style="grid-column:1/-1;font-size:12.5px;color:${MUT(60)}">${esc(LEAKLBL[l.leak]||'')}</div>
+  </div>`;
+}
+
+// ---- call recording: local-first (IndexedDB), uploaded when a blob store is configured ----
+let IDB=null;
+function idb(){if(IDB)return IDB;IDB=new Promise((res,rej)=>{const q=indexedDB.open('ls_recordings',1);q.onupgradeneeded=()=>{if(!q.result.objectStoreNames.contains('r'))q.result.createObjectStore('r');};q.onsuccess=()=>res(q.result);q.onerror=()=>rej(q.error);});return IDB;}
+async function idbPut(k,v){const db=await idb();return new Promise((res,rej)=>{const t=db.transaction('r','readwrite');t.objectStore('r').put(v,k);t.oncomplete=res;t.onerror=()=>rej(t.error);});}
+async function idbAll(){const db=await idb();return new Promise((res,rej)=>{const t=db.transaction('r','readonly'),s=t.objectStore('r'),out={},c=s.openCursor();c.onsuccess=e=>{const cur=e.target.result;if(!cur)return res(out);out[cur.key]=cur.value;cur.continue();};c.onerror=()=>rej(c.error);});}
+async function idbDel(k){const db=await idb();return new Promise(res=>{const t=db.transaction('r','readwrite');t.objectStore('r').delete(k);t.oncomplete=res;});}
+async function hydrateRecs(){try{const all=await idbAll();Object.keys(all).forEach(k=>{const r=all[k];S.recs[k]={name:r.name,size:r.size,url:r.url||URL.createObjectURL(r.blob),remote:!!r.url,at:r.at};});if(Object.keys(all).length)render();}catch(e){}}
+const kb=n=>n>=1048576?(n/1048576).toFixed(1)+' MB':Math.max(1,Math.round(n/1024))+' KB';
+
+async function recPick(input,leadId){
+  const f=input.files&&input.files[0];input.value='';if(!f)return;
+  S.recBusy=leadId;render();
+  const url=URL.createObjectURL(f);
+  const rec={name:f.name,size:f.size,url,remote:false,at:new Date().toISOString()};
+  S.recs[leadId]=rec;
+  try{await idbPut(leadId,{name:f.name,size:f.size,blob:f,at:rec.at});}catch(e){}
+  try{
+    const r=await fetch('/api/recording?lead='+encodeURIComponent(leadId)+'&name='+encodeURIComponent(f.name),
+      {method:'POST',headers:Object.assign({'Content-Type':f.type||'application/octet-stream'},authHeaders()),body:f});
+    if(r.ok){const j=await r.json();rec.remote=true;rec.url=j.url;try{await idbPut(leadId,{name:f.name,size:f.size,url:j.url,at:rec.at});}catch(e){}}
+  }catch(e){}
+  S.recBusy=null;render();
+}
+async function recDrop(leadId){delete S.recs[leadId];await idbDel(leadId);render();}
+
+const AUDIO_ACCEPT='audio/*,.mp3,.wav,.m4a,.aac,.ogg,.oga,.opus,.flac,.wma,.amr,.3gp,.webm,.mp4,.caf,.aiff,.aif';
+function recordingBlock(l){
+  const r=S.recs[l.id],busy=S.recBusy===l.id;
+  const head=`<div style="font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:${MUT(45)}">Call recording</div>`;
+  if(busy)return `<div style="padding:16px 0;border-bottom:1px solid var(--color-divider)">${head}<div style="font-size:13px;color:${MUT(55)};margin-top:8px">Uploading…</div></div>`;
+  if(r)return `<div style="padding:16px 0;border-bottom:1px solid var(--color-divider);display:flex;flex-direction:column;gap:10px">
+    <div style="display:flex;align-items:baseline;gap:12px">${head}<span style="flex:1"></span><span style="font-size:11px;color:${MUT(45)}">${esc(r.name)} · ${kb(r.size)} · ${r.remote?'uploaded':'on this device'}</span><button onclick="recDrop('${l.id}')" style="background:none;border:none;cursor:pointer;font-size:11.5px;color:${MUT(55)};text-decoration:underline;padding:0">Remove</button></div>
+    <audio controls preload="metadata" src="${esc(r.url)}" style="width:100%;height:36px"></audio>
+  </div>`;
+  return `<div style="padding:16px 0;border-bottom:1px solid var(--color-divider);display:flex;align-items:center;gap:14px">${head}
+    <span style="flex:1"></span>
+    <label style="cursor:pointer;font-size:12.5px;padding:7px 14px;border:1px solid ${MUT(22)};border-radius:2px">Upload audio<input type="file" accept="${AUDIO_ACCEPT}" onchange="recPick(this,'${l.id}')" style="display:none"></label>
+  </div>`;
+}
+
 function auditPanel(){
   const l=L().find(x=>x.id===S.selId)||{timeline:[]};if(!l.id)return'<div></div>';
   const cat=catObj(S.catKey),a=S.audits[l.id]||{},p=prio(l.id),dl=catLeads(S.catKey),rank=dl.findIndex(x=>x.id===l.id)+1;
@@ -382,24 +460,26 @@ function auditPanel(){
   const tl=l.timeline.map((r,i)=>{const dot=r.kind==='flag'?'width:17px;height:17px;border-radius:999px;background:var(--color-bg);border:3px solid var(--color-accent);box-shadow:0 0 0 4px var(--color-accent-100)':r.kind==='pending'?'width:14px;height:14px;border-radius:999px;background:transparent;border:2px solid '+MUT(26):'width:14px;height:14px;border-radius:999px;background:var(--color-accent-2)';
     const conn=i>0?`<span style="flex:1;height:2px;margin-top:7px;min-width:20px;${r.kind==='done'?'background:var(--color-accent-2)':'background:repeating-linear-gradient(90deg,var(--color-accent) 0 6px,transparent 6px 12px)'}"></span>`:'';
     return conn+`<span style="display:flex;flex-direction:column;align-items:center;gap:9px;width:96px;flex:none"><span style="${dot}"></span><span style="font-size:10.5px;line-height:1.4;text-align:center;color:${r.kind==='flag'?'var(--color-accent-800)':MUT(60)}">${esc(r.what)}<br><span style="opacity:.7">${esc(r.when)}</span></span></span>`;}).join('');
-  const factors=[['Urgency',p.urg],['Rep risk',p.repRisk]].map(f=>`<span style="display:flex;flex-direction:column;gap:4px;width:78px"><span style="display:flex;justify-content:space-between;gap:6px"><span style="font-size:10px;color:${MUT(55)}">${f[0]}</span><span style="font-size:10px;font-weight:700">${f[1]}</span></span><span style="height:5px;border-radius:999px;background:${MUT(9)};overflow:hidden"><span style="display:block;height:100%;width:${f[1]}%;background:var(--color-accent);border-radius:999px"></span></span></span>`).join('');
+  const factors=[['Urgency',p.urg],['LRM risk',p.repRisk]].map(f=>`<span style="display:flex;flex-direction:column;gap:4px;width:78px"><span style="display:flex;justify-content:space-between;gap:6px"><span style="font-size:10px;color:${MUT(55)}">${f[0]}</span><span style="font-size:10px;font-weight:700">${f[1]}</span></span><span style="height:5px;border-radius:999px;background:${MUT(9)};overflow:hidden"><span style="display:block;height:100%;width:${f[1]}%;background:var(--color-accent);border-radius:999px"></span></span></span>`).join('');
   const sev=SEVS.map(s=>`<button class="btn" data-act="sev" data-v="${s[0]}" style="padding:8px 14px;font-size:12.5px;border:1.5px solid ${a.sev===s[0]?(s[0]==='high'?'var(--color-accent-700);background:var(--color-accent-200);color:var(--color-accent-800)':s[0]==='med'?'var(--color-accent);background:var(--color-accent-100);color:var(--color-accent-800)':'var(--color-accent-2);background:var(--color-accent-2-100);color:var(--color-accent-2-800)'):MUT(16)+';color:'+MUT(65)}">${s[1]}</button>`).join('');
   const rcaBlock=`<div style="display:flex;flex-direction:column;gap:18px;background:var(--color-accent-100);border-radius:18px;padding:20px">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:10px"><span style="font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--color-accent-800)">Root-cause drill-down · 5 Whys</span><span class="${done?'tag tag-accent-2':'tag tag-neutral'}">${done?'Root cause found ✓':'In progress'}</span></div>
       <div style="display:flex;flex-direction:column;gap:16px">${whyBlockHtml(l)}</div>
       ${concluded?`<div style="display:flex;gap:12px;background:var(--color-accent-2-100);border-radius:14px;padding:14px 16px;align-items:flex-start"><span style="width:26px;height:26px;flex:none;display:grid;place-items:center;border-radius:999px;background:var(--color-accent-2);color:var(--color-bg);font-weight:700;font-size:13px">✓</span><div style="line-height:1.45"><div style="font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--color-accent-2-800);margin-bottom:3px">Root cause</div><div style="font-size:14.5px;color:var(--color-accent-2-900)">${esc(w.terminal)}</div></div><span style="flex:1"></span><button class="btn" data-act="whyBack" data-v="0" style="font-size:11.5px;padding:6px 12px;align-self:center;border:1px solid ${MUT(20)}">Restart</button></div>
       <div style="display:grid;grid-template-columns:1fr auto;gap:16px;align-items:end"><div class="field"><label>Corrective action</label><select class="input" data-act="action">${ACTIONS.map(o=>`<option ${a.action===o?'selected':''}>${esc(o)}</option>`).join('')}</select></div><div class="field"><label>Severity</label><div style="display:flex;gap:8px">${sev}</div></div></div>
-      <div class="field"><label>Coaching note to ${esc(l.rep)}</label><textarea class="input" data-act="note" rows="2" placeholder="One clear line the rep can act on…" style="min-height:auto;resize:none">${esc(a.note||'')}</textarea></div>`:''}</div>`;
+      <div class="field"><label>Coaching note to ${esc(l.LRM)}</label><textarea class="input" data-act="note" rows="2" placeholder="One clear line the LRM can act on…" style="min-height:auto;resize:none">${esc(a.note||'')}</textarea></div>`:''}</div>`;
   const tagcls='tag '+(S.catKey==='mcch_past'||S.catKey==='mcch_future'?'tag-accent-2':'tag-accent');
   return `<div class="card elev-sm" style="padding:0;overflow:hidden">
     <div style="padding:22px 26px 18px;display:flex;align-items:flex-start;justify-content:space-between;gap:16px;border-bottom:1px solid var(--color-divider)">
-      <div style="display:flex;align-items:center;gap:14px"><span style="width:52px;height:52px;flex:none;display:grid;place-items:center;border-radius:999px;background:var(--color-accent-200);color:var(--color-accent-800);font-size:17px;font-weight:700">${esc(l.ini)}</span><div style="line-height:1.3"><div style="font-family:var(--font-heading);font-size:23px">${esc(l.name)}</div><div style="font-size:12.5px;color:${MUT(58)}">${esc(l.meta)} · rep ${esc(l.rep)}</div></div></div>
+      <div style="display:flex;align-items:center;gap:14px"><div style="line-height:1.3"><div style="font-family:var(--font-heading);font-size:23px">${esc(l.name)}</div><div style="font-size:12.5px;color:${MUT(58)}">${esc(l.meta)} · LRM ${esc(l.LRM)}</div></div></div>
       <span class="${tagcls}">${esc(cat.name)}</span></div>
     <div style="padding:22px 26px;display:flex;flex-direction:column;gap:18px">
-      <div style="display:flex;gap:12px;background:var(--color-accent-2-100);border-radius:16px;padding:14px 16px"><span style="width:26px;height:26px;flex:none;display:grid;place-items:center;border-radius:999px;background:var(--color-accent-2);color:var(--color-bg);font-size:14px;font-weight:700">!</span><div style="line-height:1.5"><div style="font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--color-accent-2-800);margin-bottom:3px">Breach already recorded</div><div style="font-size:13.5px;color:var(--color-accent-2-900)">${esc(l.systemNote)}</div></div></div>
+      <div style="display:flex;gap:12px;padding:0 0 4px"><div style="line-height:1.5"><div style="font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:${MUT(45)};margin-bottom:3px">Breach recorded</div><div style="font-size:13.5px;color:${MUT(85)}">${esc(l.systemNote)}</div></div></div>
       <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap"><span style="${tierStyle(p.tier,1)}">${p.tier} · score ${p.score}/100</span><span style="font-size:12px;color:${MUT(55)}">#${rank} of ${dl.length} by breach severity in this category</span><span style="flex:1;min-width:12px"></span><span style="display:flex;gap:12px">${factors}</span></div>
       <div><div style="font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:${MUT(52)};margin-bottom:6px">What breached here</div><div style="font-size:14px;line-height:1.55;color:${MUT(88)}">${esc(cat.check)}</div></div>
-      <div style="background:var(--color-bg);border-radius:16px;padding:18px 18px 16px;border:1px solid var(--color-divider)"><div style="font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:${MUT(50)};margin-bottom:16px">Lead history</div><div class="ls-scroll" style="display:flex;align-items:flex-start;overflow-x:auto">${tl}</div></div>
+      ${activityBlock(l)}
+      ${recordingBlock(l)}
+      <details><summary style="font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:${MUT(50)};cursor:pointer">Full lead history</summary><div class="ls-scroll" style="display:flex;align-items:flex-start;overflow-x:auto;padding-top:16px">${tl}</div></details>
       ${rcaBlock}
       <div style="display:flex;align-items:center;justify-content:space-between;gap:12px"><button class="btn btn-secondary" data-act="prev" style="font-size:13px">← Previous</button><span style="font-size:11.5px;color:${MUT(45)}">${done?'RCA submitted ✓':'Work through the 5 Whys to reach the root cause'}</span><button class="btn btn-primary" data-act="next">Submit RCA &amp; next →</button></div>
     </div></div>`;
@@ -412,7 +492,7 @@ function adherView(){
   const cov=r=>r>=75?'var(--color-accent-2)':r>=40?'var(--color-accent)':'#b2622d';
   const gaps=CATS.map(c=>{const dl=catLeads(c.key),d2=dl.filter(l=>rcaDone(l.id)).length,r=dl.length?Math.round(d2/dl.length*100):0;
     return `<div style="display:flex;flex-direction:column;gap:6px"><div style="display:flex;justify-content:space-between;gap:10px"><span style="display:flex;align-items:center;gap:9px;font-size:13.5px;font-weight:600"><span style="width:10px;height:10px;border-radius:999px;background:${c.dot}"></span>${esc(c.name)}</span><span style="font-size:12.5px;color:${MUT(60)}">${d2} of ${dl.length} RCAs</span></div><span style="height:8px;border-radius:999px;background:${MUT(9)};overflow:hidden"><span style="display:block;height:100%;width:${r}%;background:${cov(r)};border-radius:999px"></span></span></div>`;}).join('');
-  const reps=R().map(r=>{const mine=L().filter(l=>l.rep===r.name),sd=mine.filter(l=>rcaDone(l.id)).length,mx=Math.max(1,...r.trend),fl=r.trend.reduce((a,b)=>a+b,0);
+  const LRMs=R().map(r=>{const mine=L().filter(l=>l.LRM===r.name),sd=mine.filter(l=>rcaDone(l.id)).length,mx=Math.max(1,...r.trend),fl=r.trend.reduce((a,b)=>a+b,0);
     const spark=r.trend.map(v=>`<span style="width:8px;border-radius:3px 3px 0 0;background:color-mix(in srgb,var(--color-accent) 70%,transparent);height:${Math.max(3,Math.round(v/mx*24))}px"></span>`).join('');
     return `<div style="display:flex;align-items:center;gap:14px"><span style="width:34px;height:34px;flex:none;display:grid;place-items:center;border-radius:999px;background:var(--color-accent-200);color:var(--color-accent-800);font-size:12px;font-weight:700">${esc(r.ini)}</span><div style="flex:1;min-width:0"><div style="display:flex;justify-content:space-between;gap:8px"><span style="font-size:13.5px;font-weight:600">${esc(r.name)}</span><span style="font-size:12px;color:${MUT(55)};font-weight:600">${fl} flagged</span></div><div style="display:flex;align-items:flex-end;gap:4px;height:26px;margin-top:5px">${spark}</div></div><div style="text-align:right;line-height:1.2"><div style="font-family:var(--font-heading);font-size:19px">${sd}</div><div style="font-size:10.5px;color:${MUT(55)}">RCA'd</div></div></div>`;}).join('');
   const ring=(deg,accent,val)=>`<span style="width:90px;height:90px;flex:none;border-radius:999px;background:conic-gradient(${accent} ${deg}deg, ${MUT(10)} 0);display:grid;place-items:center"><span style="width:68px;height:68px;border-radius:999px;background:var(--color-surface);display:grid;place-items:center"><span style="font-family:var(--font-heading);font-size:23px">${val}%</span></span></span>`;
@@ -429,12 +509,12 @@ function adherView(){
     </div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px">
       <div class="card elev-sm" style="padding:22px 24px;gap:16px"><div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:${MUT(55)}">RCA coverage by category</div>${gaps}</div>
-      <div class="card elev-sm" style="padding:22px 24px;gap:14px"><div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:${MUT(55)}">Per-rep breach trend</div>${reps}</div>
+      <div class="card elev-sm" style="padding:22px 24px;gap:14px"><div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:${MUT(55)}">Per-LRM breach trend</div>${LRMs}</div>
     </div></div>`;
 }
 function assigneesFor(origTl){const names=[origTl];TLS().forEach(t=>{if(t.name&&names.indexOf(t.name)<0)names.push(t.name);});RCA_SEEDS.forEach(s=>{if(s.tl&&names.indexOf(s.tl)<0)names.push(s.tl);});return names;}
 function rcaSubs(){
-  const live=L().filter(l=>rcaDone(l.id)).map(l=>{const x=S.audits[l.id];return{id:'live-'+l.id,lead:l.name,rep:l.rep,tl:myTlName(),cat:l.cat,rca:x.reason,action:x.action,sev:x.sev||'med',when:'just now',live:true};});
+  const live=L().filter(l=>rcaDone(l.id)).map(l=>{const x=S.audits[l.id];return{id:'live-'+l.id,lead:l.name,LRM:l.LRM,tl:myTlName(),cat:l.cat,rca:x.reason,action:x.action,sev:x.sev||'med',when:'just now',live:true};});
   return live.concat(RCA_SEEDS);
 }
 function rcaView(){
@@ -451,14 +531,14 @@ function rcaView(){
     const reassigned=v==='rework'&&r.assignee&&r.assignee!==s.tl;
     let noteBlock='';
     if(v){
-      const noteLbl=v==='rework'?('What '+esc(first1(s.rep))+'\u2019s TL must correct'):('Note on '+esc(first1(s.rep))+'\u2019s RCA (optional)');
+      const noteLbl=v==='rework'?('What '+esc(first1(s.LRM))+'\u2019s TL must correct'):('Note on '+esc(first1(s.LRM))+'\u2019s RCA (optional)');
       const reassign=v==='rework'?`<div class="field" style="min-width:210px"><label>Reassign RCA to</label><select class="input" data-act="rcaAssignee" data-v="${s.id}">${assigneesFor(s.tl).map(n=>`<option value="${esc(n)}" ${assignee===n?'selected':''}>${esc(n===s.tl?n+' (redo)':n)}</option>`).join('')}</select></div>`:'';
       const notif=reassigned?`<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:12px"><span style="font-size:11.5px;color:${MUT(60)};display:flex;align-items:center;gap:7px"><span style="width:6px;height:6px;border-radius:999px;background:var(--color-accent)"></span>Rework routed to ${esc(assignee)}.</span><span style="flex:1"></span>${r.notified?`<span class="tag tag-accent-2">✓ Notified — sent to inbox &amp; Slack</span>`:`<button class="btn btn-primary" data-act="rcaNotify" data-v="${s.id}" style="font-size:12.5px;padding:7px 14px">Notify ${esc(s.tl)} &amp; ${esc(assignee)}</button>`}</div>`:'';
       noteBlock=`<div style="display:grid;grid-template-columns:1fr auto;gap:16px;align-items:end;animation:lsfade .2s ease"><div class="field"><label>${noteLbl}</label><textarea class="input" data-act="rcaNote" data-v="${s.id}" rows="2" placeholder="What the TL should correct or confirm…" style="min-height:auto;resize:none">${esc(r.note||'')}</textarea></div>${reassign}</div>${notif}`;
     }
     return `<div class="card elev-sm" style="padding:20px 22px;gap:14px;${wrap}">
       <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px">
-        <div style="display:flex;align-items:center;gap:12px"><span style="width:40px;height:40px;flex:none;display:grid;place-items:center;border-radius:999px;background:var(--color-accent-200);color:var(--color-accent-800);font-size:13px;font-weight:700">${esc(ini2(s.rep))}</span><div style="line-height:1.3"><div style="font-weight:600;font-size:15px">${esc(s.lead)}${s.live?` <span style="font-size:10px;font-weight:700;color:var(--color-accent);margin-left:4px">· yours</span>`:''}</div><div style="font-size:12px;color:${MUT(55)}">${esc(s.rep)} · TL ${esc(s.tl)} · ${esc(s.when)}</div></div></div>
+        <div style="display:flex;align-items:center;gap:12px"><span style="width:40px;height:40px;flex:none;display:grid;place-items:center;border-radius:999px;background:var(--color-accent-200);color:var(--color-accent-800);font-size:13px;font-weight:700">${esc(ini2(s.LRM))}</span><div style="line-height:1.3"><div style="font-weight:600;font-size:15px">${esc(s.lead)}${s.live?` <span style="font-size:10px;font-weight:700;color:var(--color-accent);margin-left:4px">· yours</span>`:''}</div><div style="font-size:12px;color:${MUT(55)}">${esc(s.LRM)} · TL ${esc(s.tl)} · ${esc(s.when)}</div></div></div>
         <div style="display:flex;gap:8px;align-items:center;flex:none"><span class="${catcls}">${esc(c?c.name:s.cat)}</span><span style="font-size:10px;font-weight:700;padding:2px 9px;border-radius:999px;white-space:nowrap;${sm[1]}">${sm[0]}</span></div></div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;background:var(--color-bg);border:1px solid var(--color-divider);border-radius:14px;padding:14px 16px"><div><div style="font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:${MUT(50)};margin-bottom:4px">Root cause logged</div><div style="font-size:13.5px">${esc(s.rca)}</div></div><div><div style="font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:${MUT(50)};margin-bottom:4px">Corrective action</div><div style="font-size:13.5px">${esc(s.action)}</div></div></div>
       <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;border-top:1px solid var(--color-divider);padding-top:14px"><span style="font-size:13px;font-weight:600">Is this RCA done correctly?</span><button class="btn" data-act="rcaAccept" data-v="${s.id}" style="${accStyle}"><span style="margin-right:6px">✓</span>Accept RCA</button><button class="btn" data-act="rcaRework" data-v="${s.id}" style="${rewStyle}"><span style="margin-right:6px">↺</span>Needs rework</button><span style="flex:1"></span><span class="${statl[1]}">${statl[0]}</span></div>
@@ -476,7 +556,7 @@ function buildDir(){
   const H=S.hier||[];const tl=new Map(),zsm=new Map(),ados=new Map();
   H.forEach(a=>{if(a.tl_email)tl.set(a.tl_email,{name:a.tl_name||nameFromEmail(a.tl_email),email:a.tl_email});if(a.zsm_email)zsm.set(a.zsm_email,{name:a.zsm_name||nameFromEmail(a.zsm_email),email:a.zsm_email});if(a.ados_email)ados.set(a.ados_email,{name:a.ados_name||nameFromEmail(a.ados_email),email:a.ados_email});});
   const scope=(f,e)=>H.filter(x=>x[f]===e).length;
-  const rows=[...[...ados.values()].map(p=>({...p,role:'ADOS',scope:scope('ados_email',p.email)})),...[...zsm.values()].map(p=>({...p,role:'ZSM',scope:scope('zsm_email',p.email)})),...[...tl.values()].map(p=>({...p,role:'TL',scope:scope('tl_email',p.email)})),...H.map(a=>({name:a.rep_name,email:a.rep_email,role:'LRM',scope:1}))];
+  const rows=[...[...ados.values()].map(p=>({...p,role:'ADOS',scope:scope('ados_email',p.email)})),...[...zsm.values()].map(p=>({...p,role:'ZSM',scope:scope('zsm_email',p.email)})),...[...tl.values()].map(p=>({...p,role:'TL',scope:scope('tl_email',p.email)})),...H.map(a=>({name:a.lrm_name,email:a.lrm_email,role:'LRM',scope:1}))];
   return{rows,ados:ados.size,zsm:zsm.size,tl:tl.size,lrm:H.length};
 }
 function settingsView(){
@@ -552,6 +632,7 @@ document.addEventListener('keydown',e=>{const t=e.target.closest&&e.target.close
 
 setInterval(tickTimers,1000);
 load();
+hydrateRecs();
 </script>
 </body>
 </html>
