@@ -220,10 +220,9 @@ function errorView(why){
 // Layout preview only. Reachable ONLY with ?sample=1 in the URL — never a fallback for a
 // failed API call, and every screen carries a banner, so sample numbers can't be mistaken
 // for live ones.
-const SAMPLE=/[?&]sample=1/.test(location.search);
+const SAMPLE=/[?&]sample=(1|admin)/.test(location.search);
 function sampleData(){
-  const d=new Date(),iso=n=>{const x=new Date(d);x.setDate(x.getDate()-n);return x.toISOString();};
-  const today=d.toISOString().slice(0,10);
+  const d=new Date(),iso=n=>{const x=new Date(d);x.setDate(x.getDate()-n);return x.toISOString();};  const today=d.toISOString().slice(0,10);
   const teams=[['amit.jaiswar@solarsquare.in','Amit Jaiswar','Pune',['Sakshi Jadhav','Tejal Pakhale','Manasi Jagtap']],
                ['unnati.dahikar@solarsquare.in','Unnati Dahikar','Indore',['Khushi Piplewar','Uday Jain']]];
   const cats=['mcch_past','followup_missed','not_interested','not_qualified','mcch_future'];
@@ -250,10 +249,12 @@ function sampleData(){
       else{row.status_changed_at=iso(od);if(k===1)row.qualified_at=iso(od+2);}
       queue.push(row);}});
   });
-  return{queue,hierarchy,role:'tl',meEmail:teams[0][0],user:{name:'Sample TL',email:teams[0][0]}};
+  return{queue,hierarchy,role:SAMPLE_ROLE,meEmail:teams[0][0],user:{name:'Sample '+(SAMPLE_ROLE==='admin'?'Admin':'TL'),email:teams[0][0]}};
 }
+// ?sample=1 previews as a TL; ?sample=admin previews the admin/manager screens.
+const SAMPLE_ROLE=/[?&]sample=admin/.test(location.search)?'admin':'tl';
 function sampleBanner(){
-  return SAMPLE?`<div style="background:var(--color-accent-2);color:var(--color-bg);font-size:12.5px;font-weight:600;letter-spacing:.04em;text-align:center;padding:6px 12px">SAMPLE DATA — layout preview only. Remove ?sample=1 from the URL for live data.</div>`:'';
+  return SAMPLE?`<div style="background:var(--color-accent-2);color:var(--color-bg);font-size:12.5px;font-weight:600;letter-spacing:.04em;text-align:center;padding:6px 12px">SAMPLE DATA — layout preview only${SAMPLE_ROLE==='admin'?' (admin view)':''}. Remove the ?sample flag from the URL for live data.</div>`:'';
 }
 
 function fetchT(url,ms,headers){const c=new AbortController();const t=setTimeout(()=>c.abort(),ms||3500);return fetch(url,{signal:c.signal,headers:headers||{}}).finally(()=>clearTimeout(t));}
@@ -454,10 +455,12 @@ function mtdStats(){
 const isTL=()=>S.role==='tl';
 function isAud(){ensureAuditors();const me=norm((S.user&&S.user.email)||S.meEmail||'');return S.role==='admin'||(!!me&&S.rcaAuditors.map(norm).includes(me));}
 function screensFor(){
+  // A TL audits their own team's leads and tracks their own adherence — nothing else.
+  // Cross-team progress is a manager's question, so 'mgr' is not offered to TLs.
   const out=[];
-  if(isTL()){out.push(['queue','Audit queue'],['adher','My adherence']);}
+  if(isTL())return [['queue','Audit queue'],['adher','My adherence']];
   if(isAud())out.push(['rca','RCA audit']);
-  out.push(['mgr',isTL()?'Team view':'Team progress']);
+  out.push(['mgr','Team progress']);
   if(S.role==='admin'||SAMPLE)out.push(['settings','Settings']);
   return out;
 }
@@ -565,7 +568,8 @@ function queueView(){
   const total=L().length,done=audited();
   if(!total)return `<div class="wrap" style="padding-top:96px;animation:lsfade .25s ease">
     <h2 style="margin:0 0 12px;font-size:34px;font-weight:700">Nothing flagged today</h2>
-    <div style="font-size:15.5px;line-height:1.6;color:${MUT(60)};max-width:56ch;text-wrap:pretty">No lead under your team has gone silent past its threshold, so there is no root-cause analysis to do. The queue refreshes with each morning's export.</div></div>`;
+    <div style="font-size:15.5px;line-height:1.6;color:${MUT(60)};max-width:56ch;text-wrap:pretty">No lead under your team has gone silent past its threshold, so there is no root-cause analysis to do. The queue refreshes with each morning's export.</div>
+    <div style="font-size:13px;line-height:1.6;color:${MUT(45)};max-width:56ch;padding-top:22px;text-wrap:pretty">Expecting leads here? An empty queue can also mean today’s export hasn’t landed, or that the queue’s LRM addresses don’t match the mapping sheet. <a href="/api/debug" target="_blank">Run the diagnostic</a> — it names which of the two it is.</div></div>`;
 
   const rail=CATS.map(c=>{const dl=catLeads(c.key),d=dl.filter(l=>rcaDone(l.id)).length,on=c.key===S.catKey;
     return `<button data-act="cat" data-v="${c.key}" style="display:block;width:100%;text-align:left;background:none;border:none;padding:9px 0;cursor:pointer;font-family:inherit">
@@ -758,6 +762,16 @@ function settingsView(){
       <div class="card elev-sm" style="padding:22px 24px;gap:6px"><div style="font-size:14px;font-weight:700">RCA auditors</div><div style="font-size:12px;color:${MUT(60)};margin-bottom:8px">Can open the RCA audit tab and review any TL's root-cause analysis across teams.</div><div style="display:flex;flex-direction:column;gap:10px">${audRows}</div><div style="display:flex;gap:8px;margin-top:14px"><input class="input" data-act="auditorInput" type="email" value="${esc(S.newAuditor||'')}" placeholder="name@solarsquare.in" style="flex:1"><button class="btn btn-primary" data-act="auditorAdd" style="flex:0 0 auto">Add</button></div><div style="font-size:11.5px;color:${MUT(48)};line-height:1.5;margin-top:12px">Saved to this browser only (not shared with other admins). For a permanent, company-wide change, set the <code>RCA_AUDITOR_EMAILS</code> Vercel env var instead.</div></div>
     </div>
     <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:18px;padding-bottom:20px">${stat('ADOS',dir.ados,'reporting lines')}${stat('ZSMs',dir.zsm,'reporting lines')}${stat('Team Leads',dir.tl,'reporting lines')}${stat('LRMs',dir.lrm,'in EmployeeMaster')}</div>
+    <div class="card elev-sm" style="padding:22px 24px;gap:6px;margin-bottom:20px">
+      <div style="font-size:14px;font-weight:700">Sample data · layout preview</div>
+      <div style="font-size:12px;color:${MUT(60)};line-height:1.55;max-width:70ch">Opens every screen filled with invented leads, so you can review the interface when today’s queue is empty or while the export is being fixed. Sample mode is banner-marked throughout, writes nothing to the RCA log, and is only ever entered deliberately — it never replaces live data on a failure.</div>
+      <div style="display:flex;gap:10px;margin-top:14px">
+        ${SAMPLE
+          ? `<a class="btn btn-primary" href="${esc(location.pathname)}">Return to live data</a>`
+          : `<a class="btn btn-secondary" href="${esc(location.pathname)}?sample=admin">Open with sample data</a>`}
+        <a class="btn btn-ghost" href="/api/debug" target="_blank">Run queue diagnostic</a>
+      </div>
+    </div>
     <div class="card elev-sm" style="padding:0;overflow:hidden"><div style="padding:16px 20px;border-bottom:1px solid var(--color-divider)"><input class="input" data-act="dirSearch" value="${esc(S.dirQ||'')}" placeholder="Search name or email…" style="max-width:320px"></div><div style="max-height:440px;overflow:auto"><table class="table"><thead><tr><th>Name</th><th>Email</th><th style="text-align:center">Role</th><th style="text-align:center">Team size</th></tr></thead><tbody>${trows}</tbody></table></div></div>
   </div>`;
 }
