@@ -6,10 +6,17 @@ The tool reads **two tabs** from the Google Sheet and merges them on `lrm_email`
 
 | Tab | What it is | Who fills it |
 |-----|------------|--------------|
-| `Audit_Queue` | Daily output of `audit_queue_daily_v3.sql` (one row per sampled lead) | Apps Script / Metabase export, once a day |
-| `LRM_TL_MAP`  | LRM → TL / ZSM / ADOS mapping (dynamic) | already maintained for the QA / LRM dashboards |
+| `Audit_Queue` | Daily output of `audit_queue_daily_v4.sql` (one row per sampled lead) | Apps Script / Metabase export, once a day — read only |
+| `LRM_TL_MAP`  | LRM → TL / ZSM / ADOS mapping (dynamic) | maintained for the QA / LRM dashboards — **read only, never written to** |
 
-`Audit_Queue` header row must match the SQL column names: `audit_date, lrm_id, lrm_name, lrm_email, lead_id, customer_name, cluster, lead_stage, category, leak_code, priority_key, lrm_category_rank, created_at, meeting_confirmed_at, meeting_schedule_date, meeting_done_date, follow_up_at, qualified_at, status_changed_at, attempt_today, last_activity_at, last_activity_type, days_silent, hours_silent, calls_30d, connects_30d, days_overdue`.
+Both live on the spreadsheet at `SHEET_ID`. A **separate** spreadsheet (`RCA_SHEET_ID`) holds
+the app's own write-side log:
+
+| Tab | What it holds | Written by |
+|---|---|---|
+| `RCA_Log` | Every completed RCA, appended | the app, via `/api/rca` — tab created automatically |
+
+`Audit_Queue` header row must match the SQL column names: `audit_date, lrm_id, lrm_name, lrm_email, lead_id, customer_name, cluster, lead_stage, lead_status, category, leak_code, priority_key, lrm_category_rank, created_at, meeting_confirmed_at, meeting_schedule_date, meeting_done_date, follow_up_at, qualified_at, status_changed_at, attempt_today, last_activity_at, last_activity_type, days_silent, hours_silent, calls_30d, connects_30d, loop_turns, mcch_events, dev_events, days_overdue`.
 
 ---
 
@@ -52,9 +59,9 @@ git push
 | `GOOGLE_CLIENT_ID`| OAuth client ID — **the moment this is set, sign-in is enforced** |
 | `ADMIN_EMAILS`    | comma-separated admins (see the Settings tab) |
 | `BLOB_READ_WRITE_TOKEN` | *(optional)* Vercel Blob token — enables server-side call-recording storage |
-| `OPENAI_API_KEY`  | *(optional)* hosted transcription — **not needed**, the default engine is on-device |
-| `TRANSCRIBE_URL`  | *(optional)* self-hosted Whisper endpoint, used instead of OpenAI |
-| `TRANSCRIBE_MODEL`| *(optional)* defaults to `gpt-4o-transcribe`; `whisper-1` also works |
+| `OPENAI_API_KEY`  | *(not used — transcription is shelved for now)* |
+| `RCA_SHEET_ID`    | spreadsheet the app writes the RCA log into — **must not** be the mapping sheet |
+| `RCA_TAB`         | *(optional)* RCA log tab name — defaults to `RCA_Log` |
 
 4. **Deploy.**
 
@@ -65,42 +72,31 @@ own browser (IndexedDB) and no one else can hear them. To share them across the 
 Vercel dashboard → **Storage → Create → Blob**, connect it to this project, redeploy.
 The token is injected automatically and `/api/recording` starts persisting uploads.
 
-### Transcription
+### Transcription — shelved
 
-**The default engine costs nothing and needs no setup.** Whisper (MIT weights) runs
-on-device in the auditor's browser via WebGPU/WASM — no API key, no server, and the call
-audio never leaves the machine. Pick the engine, model and language under any recording:
+Removed for now. Two approaches were built and both were unsatisfying in practice:
+on-device Whisper (Transformers.js) was free and private but CPU-bound and slow (~1–2 min
+per 10 min of audio, since most machines expose no usable WebGPU adapter), and the hosted
+OpenAI route bills per minute and sends customer audio to a third party.
 
-- **Tiny** — fastest, rough. Fine for checking whether a call happened at all.
-- **Base** (default) — the sensible balance.
-- **Small** — slowest, clearly best on Hindi / code-switched calls.
+When this comes back, the likely answer is a self-hosted **faster-whisper** endpoint on a
+machine SolarSquare already owns, fronted by an `/api/transcribe` route — no per-minute
+cost, audio stays in-house, and the GPU makes it fast enough to be useful. Recording upload
+is unaffected and still works.
 
-The model downloads once (~40 MB tiny, ~80 MB base, ~250 MB small) and is then cached by
-the browser, so only the first transcription waits. WebGPU is used when the browser exposes
-it and is several times faster; otherwise it falls back to WASM. Expect roughly
-0.5–2× real time on WebGPU, slower on WASM — the tab must stay open.
+### Roles
 
-Needs a Chromium browser (Chrome/Edge) for module workers + WebGPU. Transcripts are cached
-with the recording, so re-opening a lead never re-runs the model.
+The queue is work **TLs** do. Everyone above them sees what the teams did with it:
 
-#### Optional: a server backend instead
+| Role | Tabs |
+|---|---|
+| Team Lead | Audit queue · My adherence · Team view |
+| RCA auditor (`RCA_AUDITOR_EMAILS` / Settings) | RCA audit · Team progress |
+| ZSM / ADOS | Team progress |
+| Admin | RCA audit · Team progress · Settings |
 
-`/api/transcribe` exists so the backend can be swapped without touching the UI — choose
-“Server” in the engine dropdown. Two ways to fill it:
-
-- `TRANSCRIBE_URL` — any OpenAI-compatible `/audio/transcriptions` endpoint
-  (faster-whisper-server, whisper.cpp server, your own GPU box). **No per-minute cost**,
-  and audio stays inside your infrastructure. No OpenAI key needed.
-- `OPENAI_API_KEY` — the hosted API, ~$0.006/min. Convenient, but it bills per call and
-  sends customer audio to a third party. `TRANSCRIBE_MODEL` defaults to
-  `gpt-4o-transcribe`; set `whisper-1` for segment timestamps.
-
-Both server paths need **Vercel Pro** for the 300s function timeout — on Hobby long calls
-are cut at 10s. The on-device engine has no such limit, which is another reason it's the
-default.
-
-Compliance note: on-device and self-hosted keep recordings in-house. Only the hosted
-OpenAI path sends customer audio out — get that cleared before enabling it.
+No role is ever locked out by an empty queue — a day with nothing flagged shows an empty
+state, not an error.
 
 ### Sign-in
 Sign-in only turns on once `GOOGLE_CLIENT_ID` is set. Add the deployed URL
@@ -118,28 +114,54 @@ or Google rejects the login with an `origin` error.
 ## Wiring the daily export
 
 Point the same Apps Script that feeds the QA/LRM sheets at a new `Audit_Queue` tab:
-run `audit_queue_daily_v3.sql` in Metabase → CSV → clear-and-replace into `Audit_Queue`.
+run `audit_queue_daily_v4.sql` in Metabase → CSV → clear-and-replace into `Audit_Queue`.
 The app reads whatever is in that tab on each request (300s edge cache).
 
-> v3 is the activity-driven query: a lead is only flagged when it has gone **silent**
-> since its last real activity (stage change, Ozonetel dial, follow-up, CRM edit).
-> `audit_queue_daily_v2.sql` is kept for reference but is superseded.
+> **v4 is current.** It expresses the lead-journey flowchart directly: each of the five
+> branches (MLS/MD, CNC, call-later loop, LI, NQ) maps to a leak code L0–L4, and a lead is
+> only flagged when it has ALSO gone **silent** since its last real activity (stage change,
+> Manual Ozonetel dial, follow-up, CRM edit). New in v4: Manual-only call filtering,
+> `loop_turns` counted from the audit history so the never-closing call-later loop is
+> visible, and resolved `customer_name`.
+> `audit_queue_daily_v2.sql` / `_v3.sql` are kept for reference and are superseded.
+
+### The RCA log (write side)
+
+Completed RCAs are appended by `/api/rca` to an **`RCA_Log`** tab on a spreadsheet created
+**for this app** — not the LRM→TL mapping sheet. That mapping file was shared for reading
+only and the app never writes to it; if `RCA_SHEET_ID` is unset, writes are refused with a
+clear message rather than falling back to it.
+
+This log is what makes cross-team numbers possible: “Done” in Team progress, month-to-date
+adherence, and the RCA-audit tab all read it.
+
+Setup, once:
+
+1. Create a new Google Sheet — e.g. *Lead Sentinel — RCA Log*. Leave it empty.
+2. Share it with the service account (`GOOGLE_SA_EMAIL`) as **Editor**.
+3. Set `RCA_SHEET_ID` in Vercel to its id (the long string in the sheet URL between
+   `/d/` and `/edit`), and redeploy.
+
+The `RCA_Log` tab and its header row are created on the first submission. Submissions queue
+in the browser (`localStorage` outbox) and retry every 20s, so an auditor on a flaky
+connection never loses a logged RCA.
 
 ## Structure
 
 ```
 public/
-  index.html          Front-end (vanilla JS; fetches /api/queue, demo fallback)
+  index.html          Front-end (vanilla JS; fetches /api/queue)
+  preview.html        Redirects to index.html?sample=1 — layout preview with fake data,
+                      banner-marked, never reachable without the explicit flag
   styles.css          Design-system tokens + components
-  whisper-worker.js   On-device Whisper (Transformers.js) — the default, free engine
-  demo/               Sample feeds used when the API is empty
+  demo/               (removed — no demo account, no silent fallback)
 api/
   _sheets.js     Google Sheets helper (not a route)
   _metabase.js   Metabase REST helper (not a route)
   _auth.js       Google token verification (not a route)
   queue.js       GET  /api/queue
+  rca.js         GET/POST /api/rca      (the shared RCA log — read + append)
   recording.js   POST /api/recording    (Vercel Blob storage, optional)
-  transcribe.js  POST /api/transcribe   (OpenAI or self-hosted, optional)
   config.js      GET  /api/config
 package.json
 vercel.json
