@@ -21,19 +21,19 @@
 
 <script>
 const CATS=[
- {key:'mcch_past',name:'Meeting confirmed · date passed',dot:'#1668b3',
+ {key:'mcch_past',name:'Meeting confirmed · date passed',short:'MCCH past',dot:'#1668b3',
   check:'The confirmed meeting (MCCH) date is before today, but the lead is still at MCCH — the meeting was never moved to MD and no fresh date was set. A stuck MCCH is a silent MD leak.',
   reasons:['Meeting not marked MD despite date passing','No reschedule after no-show','Stuck at MCCH >48h post-meeting','Customer met but stage not updated']},
- {key:'followup_missed',name:'Follow-up overdue',dot:'#2f9e8f',
+ {key:'followup_missed',name:'Follow-up overdue',short:'Follow-up',dot:'#2f9e8f',
   check:'Follow-up date (CNC / call-later / meeting-postponed) is today or earlier, but no connect attempt is logged today. Every day cold lowers Lead→MS conversion.',
   reasons:['No connect attempt logged today','Follow-up date not honoured','No new follow-up date set','Reassigned but not actioned']},
- {key:'not_interested',name:'Marked not interested',dot:'#e0821a',
+ {key:'not_interested',name:'Marked not interested',short:'Not int.',dot:'#e0821a',
   check:'Lead was closed as Not Interested — the real objection was not captured / handled, or it was set to lost prematurely (before MD).',
   reasons:['Objection not handled','No reason / objection logged','Closed before MD (too early)','No win-back attempt']},
- {key:'not_qualified',name:'Marked not qualified',dot:'#0d3c66',
+ {key:'not_qualified',name:'Marked not qualified',short:'Not qual.',dot:'#0d3c66',
   check:'Lead was closed as Not Qualified — a discovery call did not happen or the disqualification criteria do not genuinely apply.',
   reasons:['No discovery call logged','Qualification criteria not applied','Reason code missing','Reopen candidate']},
- {key:'mcch_future',name:'Meeting confirmed · upcoming',dot:'#6aa9dd',
+ {key:'mcch_future',name:'Meeting confirmed · upcoming',short:'MCCH ahead',dot:'#6aa9dd',
   check:'Meeting (MCCH) is confirmed for a future date but the slot is outside the D+2 window, the customer confirmation is missing, or prep was not done.',
   reasons:['Customer confirmation not logged','Slot beyond D+2 window','No prep note sent to customer','Held / duplicate slot']},
 ];
@@ -46,7 +46,7 @@ const RULES=[
  ['3','Severity score','60% breach urgency + 40% LRM deviation risk → P1 / P2 / P3.'],
  ['4','Daily pick','Top 4 per category, LRM-balanced and seeded to the date so the pull is reproducible.'],
 ];
-const MTD={audited:387,total:420,range:'Jul 1–25'};
+const MTD=null; // month-to-date adherence needs a shared RCA history store; never fake it
 // 5-Why decision trees. WHYS[cat](lead) returns the opening node; every option either
 // branches to a follow-up node (`to`) or terminates at a root cause (`root`).
 const WHYS={
@@ -122,21 +122,14 @@ const WHYS={
         {t:'No prep step in the LRM routine',root:'No meeting-prep note sent to customer'},
         {t:'Held / duplicate slot',root:'Held or duplicate slot — needs cleanup'}]}}]}),
 };
-// pre-submitted RCAs awaiting the auditor's review (cross-team, illustrative)
-const RCA_SEEDS=[
- {id:'s1',lead:'Rohan Gupta',LRM:'Tejal Pakhale',tl:'Amit Jaiswar',cat:'followup_missed',rca:'No new follow-up date set',action:'Ask LRM to call today',sev:'high',when:'25 min ago'},
- {id:'s2',lead:'Priya Nair',LRM:'Akshada Tribhuwan',tl:'Amit Jaiswar',cat:'not_interested',rca:'No reason / objection logged',action:'Re-open the lead',sev:'med',when:'1h ago'},
- {id:'s3',lead:'Rohit Sethi',LRM:'Khushi Piplewar',tl:'Unnati Dahikar',cat:'not_qualified',rca:'No discovery call logged',action:'Re-open the lead',sev:'high',when:'2h ago'},
- {id:'s4',lead:'Manish Kulkarni',LRM:'Uday Jain',tl:'Unnati Dahikar',cat:'mcch_future',rca:'Customer confirmation not logged',action:'No action needed',sev:'low',when:'3h ago'},
- {id:'s5',lead:'Farah Khan',LRM:'Megha Rai',tl:'Prabhat Samal',cat:'followup_missed',rca:'Reassigned but not actioned',action:'Reassign to another LRM',sev:'med',when:'Yesterday'},
- {id:'s6',lead:'Nikhil Jain',LRM:'Saloni Singh',tl:'Prabhat Samal',cat:'not_interested',rca:'Closed before MD (too early)',action:'Escalate to manager',sev:'high',when:'Yesterday'},
-];
 const DEFAULT_AUDITORS=['quality.desk@solarsquare.in'];
 const ADMIN_FALLBACK=['analytics.sse@solarsquare.in'];
 const adminEmails=()=>AUTH.admins&&AUTH.admins.length?AUTH.admins:ADMIN_FALLBACK;
 const nameFromEmail=e=>{const s=String(e||'').split('@')[0];return s.split(/[._]+/).filter(Boolean).map(w=>w[0].toUpperCase()+w.slice(1)).join(' ')||e;};
 const ROLECLS={ADOS:'tag tag-accent-2',ZSM:'tag tag-accent',TL:'tag tag-outline',LRM:'tag tag-neutral'};
 const MON=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const DOW=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+function fmtLongDate(s){if(!s)return'';const d=new Date(String(s).slice(0,10)+'T00:00:00');return isNaN(d)?'':DOW[d.getDay()]+', '+d.getDate()+' '+MON[d.getMonth()]+' '+d.getFullYear();}
 const esc=s=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const norm=e=>String(e||'').trim().toLowerCase().replace('@homes.solarsquare.in','@solarsquare.in');
 const ini2=n=>{const p=String(n||'').trim().split(/\s+/);return((p[0]&&p[0][0]||'')+(p[1]&&p[1][0]||'')).toUpperCase();};
@@ -144,11 +137,10 @@ const first1=n=>String(n||'').split(' ')[0];
 const fmtD=iso=>{if(!iso)return'';const d=new Date(iso);return isNaN(d)?'':d.getDate()+' '+MON[d.getMonth()];};
 const fmtDT=iso=>{if(!iso)return'\u2014';const d=new Date(iso);if(isNaN(d))return'\u2014';let h=d.getHours(),m=String(d.getMinutes()).padStart(2,'0'),ap=h<12?'AM':'PM';h=h%12||12;return d.getDate()+' '+MON[d.getMonth()]+', '+h+':'+m+' '+ap;};
 const ACTLBL={call:'Call logged',stage_change:'Stage changed',meeting_done:'Meeting marked done',followup_set:'Follow-up set',crm_touch:'CRM record edited',none:'No activity ever recorded'};
-const LEAKLBL={L1:'Meeting date passed, nothing since',L2:'Marked CNC, never re-dialled',L3:'Call-later loop turning, no close',L4:'Closed with no connected call',L4b:'Closed \u2014 check the reason',L0:'Watch only'};
-const silentLbl=l=>{if(l.lastAt==null)return'never touched';const h=l.hoursSilent||0;if(h<24)return h<=1?'active this hour':h+'h silent';return (l.silent||Math.round(h/24))+'d silent';};
+const LEAKLBL={L1:'Meeting date passed, nothing since',L2:'Marked CNC, never re-dialled',L3:'Call-later loop turning, no close',L4:'Closed with no connected call',L4b:'Closed \u2014 check the reason',L0:'Watch only'};const silentLbl=l=>{if(l.lastAt==null)return'never touched';const h=l.hoursSilent||0;if(h<24)return h<=1?'active this hour':h+'h silent';return (l.silent||Math.round(h/24))+'d silent';};
 const catObj=k=>CATS.find(c=>c.key===k);
 
-const S={screen:'queue',recs:{},recBusy:null,tlEmail:null,catKey:'mcch_past',selId:null,audits:{},rcaReview:{},showRules:false,model:null,src:'live',role:'tl',user:null,meEmail:null,hier:[],rcaAuditors:null,newAuditor:'',dirQ:''};
+const S={screen:'queue',recs:{},recBusy:null,rcaLog:[],rcaPending:0,rcaErr:'',auditRaw:'',auditDate:'',tlEmail:null,catKey:'mcch_past',selId:null,audits:{},rcaReview:{},showRules:false,model:null,src:'live',role:'tl',user:null,meEmail:null,hier:[],rcaAuditors:null,newAuditor:'',dirQ:''};
 
 const AUTH={enabled:true,ready:false,clientId:'',domain:'solarsquare.in',admins:[]};
 const LOGO_SRC='https://cdn.solarsquare.in/blog/wp-content/uploads/2025/11/05101757/logo.webp';
@@ -225,8 +217,53 @@ function errorView(why){
       </div>
     </div></div>`;
 }
+// Layout preview only. Reachable ONLY with ?sample=1 in the URL — never a fallback for a
+// failed API call, and every screen carries a banner, so sample numbers can't be mistaken
+// for live ones.
+const SAMPLE=/[?&]sample=1/.test(location.search);
+function sampleData(){
+  const d=new Date(),iso=n=>{const x=new Date(d);x.setDate(x.getDate()-n);return x.toISOString();};
+  const today=d.toISOString().slice(0,10);
+  const teams=[['amit.jaiswar@solarsquare.in','Amit Jaiswar','Pune',['Sakshi Jadhav','Tejal Pakhale','Manasi Jagtap']],
+               ['unnati.dahikar@solarsquare.in','Unnati Dahikar','Indore',['Khushi Piplewar','Uday Jain']]];
+  const cats=['mcch_past','followup_missed','not_interested','not_qualified','mcch_future'];
+  const fn=['Meera','Vikram','Karan','Deepa','Sneha','Rohan','Priya','Sameer','Ritu','Alok'];
+  const ln=['Joshi','Rao','Nair','Patil','Jain','Verma','Mehta','Reddy'];
+  const queue=[],hierarchy=[];let seq=90100;
+  teams.forEach((t,ti)=>{
+    t[3].forEach(r=>hierarchy.push({lrm_email:r.toLowerCase().replace(/ /g,'.')+'@solarsquare.in',lrm_name:r,cluster:t[2],tl_email:t[0],tl_name:t[1],zsm_email:'zsm@solarsquare.in',ados_email:'ados@solarsquare.in',hr_status:'Active'}));
+    cats.forEach((cat,ci)=>{for(let k=0;k<4;k++){
+      const r=t[3][(ci+k)%t[3].length],n=seq++;
+      const od=1+((k+ci)%6),sil=od+((k)%3);
+      const row={audit_date:today,lrm_name:r,lrm_email:r.toLowerCase().replace(/ /g,'.')+'@solarsquare.in',
+        lead_id:'RMH'+n,customer_name:fn[n%fn.length]+' '+ln[(n*3)%ln.length],cluster:t[2],lead_stage:'',
+        category:cat,created_at:iso(14+od),meeting_confirmed_at:null,meeting_schedule_date:null,meeting_done_date:null,
+        follow_up_at:null,qualified_at:null,status_changed_at:null,attempt_today:false,days_overdue:od,
+        priority_key:od*10+sil,lrm_category_rank:k+1,
+        last_activity_at:iso(sil),last_activity_type:['call','stage_change','followup_set','crm_touch'][n%4],
+        days_silent:sil,hours_silent:sil*24,calls_30d:n%5,connects_30d:(n%5)?((n%3)?1:0):0,
+        leak_code:cat==='mcch_past'?'L1':cat==='followup_missed'?((n%5)<2?'L2':'L3'):cat==='mcch_future'?'L0':'L4'};
+      if(cat==='mcch_past'){row.meeting_confirmed_at=iso(od+4);row.meeting_schedule_date=iso(od);}
+      else if(cat==='mcch_future'){row.meeting_confirmed_at=iso(1);const x=new Date(d);x.setDate(x.getDate()+od);row.meeting_schedule_date=x.toISOString();}
+      else if(cat==='followup_missed')row.follow_up_at=iso(od);
+      else if(cat==='not_interested'){row.status_changed_at=iso(od);if(k!==1)row.meeting_confirmed_at=iso(od+3);}
+      else{row.status_changed_at=iso(od);if(k===1)row.qualified_at=iso(od+2);}
+      queue.push(row);}});
+  });
+  return{queue,hierarchy,role:'tl',meEmail:teams[0][0],user:{name:'Sample TL',email:teams[0][0]}};
+}
+function sampleBanner(){
+  return SAMPLE?`<div style="background:var(--color-accent-2);color:var(--color-bg);font-size:12.5px;font-weight:600;letter-spacing:.04em;text-align:center;padding:6px 12px">SAMPLE DATA — layout preview only. Remove ?sample=1 from the URL for live data.</div>`:'';
+}
+
 function fetchT(url,ms,headers){const c=new AbortController();const t=setTimeout(()=>c.abort(),ms||3500);return fetch(url,{signal:c.signal,headers:headers||{}}).finally(()=>clearTimeout(t));}
 async function load(){
+  if(SAMPLE){
+    const data=sampleData();
+    S.src='sample';S.role=data.role;S.user=data.user;S.meEmail=data.meEmail;
+    S.auditRaw=data.queue[0].audit_date;S.auditDate=fmtLongDate(data.queue[0].audit_date);
+    buildModel(data.queue,data.hierarchy);render();return;
+  }
   await initAuth();
   const sess=readSession();
   if(AUTH.enabled&&!sess){return loginView(false);}
@@ -254,11 +291,15 @@ async function load(){
   }
   if(!data){return errorView(fail);}
   S.role=data.role||'tl';
+  S.auditRaw=String((data.queue&&data.queue[0]&&data.queue[0].audit_date)||'').slice(0,10);
+  S.auditDate=fmtLongDate((data.queue&&data.queue[0]&&data.queue[0].audit_date)||'');
   S.user=data.user||sess||null;
   S.meEmail=data.meEmail||null;
   buildModel(data.queue||[],data.hierarchy||[]);
   if(S.role==='zsm'||S.role==='ados'||S.role==='admin')S.screen='mgr';
   render();
+  loadRcaLog();
+  flushRca();
 }
 
 function buildModel(queue,hier){
@@ -273,10 +314,12 @@ function buildModel(queue,hier){
       meta:(row.cluster||'')+' · '+row.lead_id,LRM:row.lrm_name,ini:ini2(row.customer_name||row.lrm_name||'NA'),lrmIni:ini2(row.lrm_name),
       urg:urg,days:row.days_overdue||0,tlEmail:tl,tlName:h.tl_name||'Unassigned',
       key:Number(row.priority_key)||0,rank:row.category_rank||99,slot:'primary',
+      lrmEmail:row.lrm_email||'',
       timeline:buildTL(row),systemNote:buildNote(row),
       lastAt:row.last_activity_at||null,lastType:row.last_activity_type||'',
       silent:Number(row.days_silent)||0,hoursSilent:Number(row.hours_silent)||0,
       calls30:Number(row.calls_30d)||0,connects30:Number(row.connects_30d)||0,leak:row.leak_code||'',
+      loops:Number(row.loop_turns)||0,
       sit:row.category==='not_interested'?(row.meeting_confirmed_at?'met':'early'):row.category==='not_qualified'?(row.qualified_at?'disc':'nodisc'):row.category==='followup_missed'?((row.days_overdue||0)>0?'overdue':'today'):''};
     (leadsByTl[tl]=leadsByTl[tl]||[]).push(lead);
     tlMeta[tl]=tlMeta[tl]||{name:h.tl_name||'Unassigned',ini:ini2(h.tl_name||'NA'),cluster:h.cluster||row.cluster};
@@ -304,10 +347,10 @@ function buildModel(queue,hier){
   const curTl=meTl||busiest||null;
   const tls=Object.keys(leadsByTl).map((tl,i)=>{const ls=leadsByTl[tl],m=tlMeta[tl],od=ls.filter(l=>l.days>2).length;
     return{email:tl,name:m.name,ini:m.ini,cluster:m.cluster,total:ls.length,me:tl===meTl,
-      simAudited:tl===curTl?null:Math.max(0,ls.length-(i%3)),simDev:tl===curTl?null:od,simHigh:tl===curTl?null:Math.round(od/2),topGap:topCat(ls)};});
+      topGap:topCat(ls)};});
   S.model={leadsByTl,lrmsByTl,lrmRiskByTl,tls,curTl};S.tlEmail=curTl;S.hier=hier||[];
   const mine=(curTl&&leadsByTl[curTl])||[];
-  const first=(mine.filter(l=>l.cat==='mcch_past').sort((a,b)=>b.urg-a.urg)[0]||mine[0]||{});
+  const first=(mine.filter(l=>l.cat==='mcch_past').sort((a,b)=>(b.key-a.key)||(b.silent-a.silent))[0]||mine[0]||{});
   S.selId=first.id||null;
 }
 function topCat(ls){const c={};ls.forEach(l=>c[l.cat]=(c[l.cat]||0)+1);const t=Object.keys(c).sort((a,b)=>c[b]-c[a])[0];return t?catObj(t).name:'—';}
@@ -332,20 +375,79 @@ function buildNote(row){const d=row.days_overdue||0;const s=Number(row.days_sile
 const L=()=>S.model?(S.model.leadsByTl[S.tlEmail]||[]):[];
 const R=()=>S.model?(S.model.lrmsByTl[S.tlEmail]||[]):[];
 const TLS=()=>S.model?S.model.tls:[];
-function repRisk(LRM){const m=S.model;if(!m)return 50;const map=m.lrmRiskByTl[S.tlEmail]||{};return map[LRM]!=null?map[LRM]:50;}
-function prio(id){const lead=L().find(l=>l.id===id);if(!lead)return{score:0,tier:'P3',urg:0,repRisk:0};
-  const rr=repRisk(lead.LRM),u=lead.urg||0,score=Math.round(0.6*u+0.4*rr);
-  return{score,tier:score>=70?'P1':score>=55?'P2':'P3',urg:u,repRisk:rr};}
-function catLeads(k){return L().filter(l=>l.cat===k).slice().sort((a,b)=>prio(b.id).score-prio(a.id).score);}
-const rcaDone=id=>!!(S.audits[id]&&S.audits[id].reason);
+// Ordering inside a category comes from the query's own rank_key (real signal: how long the
+// breach has stood plus how long the lead has been silent). No synthetic score, no tiers.
+function catLeads(k){return L().filter(l=>l.cat===k).slice()
+  .sort((a,b)=>(b.key-a.key)||(b.silent-a.silent)||(b.days-a.days)||String(a.name).localeCompare(String(b.name)));}
+const rcaDone=id=>{if(S.audits[id]&&S.audits[id].reason)return true;const t=S.auditRaw||'';return (S.rcaLog||[]).some(x=>x.lead_id===id&&String(x.audit_date||'')===t);};
 const audited=()=>L().filter(l=>rcaDone(l.id)).length;
 function myTlName(){const t=TLS().find(x=>x.me)||TLS().find(x=>x.email===S.tlEmail);return t?t.name:'You';}
-function tierStyle(t,big){const c=t==='P1'?'background:var(--color-accent);color:var(--color-bg)':t==='P2'?'background:var(--color-accent-200);color:var(--color-accent-800)':'background:var(--color-accent-2-100);color:var(--color-accent-2-800)';return(big?'font-size:11px;font-weight:700;padding:3px 10px;':'font-size:10px;font-weight:700;padding:1px 7px;')+'border-radius:999px;white-space:nowrap;'+c;}
 
 // ---- render ----
 function cutoffLeft(){const now=new Date();const cut=new Date(now);cut.setHours(19,0,0,0);if(now>=cut)cut.setDate(cut.getDate()+1);let s=Math.max(0,Math.floor((cut-now)/1000));const p=n=>String(n).padStart(2,'0');return p(Math.floor(s/3600))+':'+p(Math.floor(s%3600/60))+':'+p(s%60);}
 function tickTimers(){const t=cutoffLeft();document.querySelectorAll('[data-timer]').forEach(el=>{el.textContent=t;});}
 const MUT=p=>'color-mix(in srgb,var(--color-text) '+p+'%,transparent)';
+// ---- RCA log: the shared write store ----
+// Completed RCAs are appended to the RCA_Log tab via /api/rca, so every manager sees the
+// same numbers. Submissions go through an outbox in localStorage: an auditor on a flaky
+// connection never silently loses a logged RCA.
+function outbox(){try{const v=JSON.parse(localStorage.getItem('ls_rca_outbox')||'[]');return Array.isArray(v)?v:[];}catch(e){return[];}}
+function setOutbox(a){try{localStorage.setItem('ls_rca_outbox',JSON.stringify(a.slice(-200)));}catch(e){}}
+function rcaKey(r){return String(r.audit_date||'')+'|'+String(r.lead_id||'');}
+
+function rcaPayload(leadId){
+  const l=L().find(x=>x.id===leadId);if(!l)return null;
+  const a=S.audits[leadId]||{};if(!a.reason)return null;
+  const w=whyWalk(l),path=w.steps.map(s=>s.opt.t||s.opt.label||'').filter(Boolean).join(' → ');
+  const h=(S.hier||[]).find(x=>norm(x.lrm_email)===norm(l.lrmEmail||''))||{};
+  return{audit_date:S.auditRaw||'',lead_id:leadId,category:l.cat,
+    lrm_email:l.lrmEmail||'',lrm_name:l.LRM||'',
+    tl_email:l.tlEmail||h.tl_email||'',tl_name:l.tlName||h.tl_name||'',
+    auditor_email:(S.user&&S.user.email)||'',auditor_name:(S.user&&S.user.name)||'',
+    reason:a.reason,severity:a.sev||'',action:a.action||'',note:a.note||'',why_path:path,assignee:''};
+}
+function queueRca(leadId){
+  if(SAMPLE)return;
+  const p=rcaPayload(leadId);if(!p)return;
+  const box=outbox().filter(x=>rcaKey(x)!==rcaKey(p));box.push(p);setOutbox(box);
+  S.rcaLog=(S.rcaLog||[]).filter(x=>rcaKey(x)!==rcaKey(p)).concat([p]);
+  flushRca();
+}
+let FLUSHING=false;
+async function flushRca(){
+  if(SAMPLE||FLUSHING)return;const box=outbox();if(!box.length){S.rcaPending=0;return;}
+  FLUSHING=true;S.rcaPending=box.length;
+  try{
+    const r=await fetch('/api/rca',{method:'POST',headers:Object.assign({'Content-Type':'application/json'},authHeaders()),body:JSON.stringify({items:box})});
+    if(r.ok){setOutbox([]);S.rcaPending=0;S.rcaErr='';}
+    else{const j=await r.json().catch(()=>({}));S.rcaErr=j.message||j.error||('HTTP '+r.status);}
+  }catch(e){S.rcaErr='offline';}
+  FLUSHING=false;
+  if(S.screen)render();
+}
+async function loadRcaLog(){
+  try{
+    const r=await fetch('/api/rca?days=45',{headers:authHeaders()});
+    if(!r.ok)return;
+    const j=await r.json();
+    S.rcaLog=Array.isArray(j.rows)?j.rows:[];
+    // rehydrate my own RCAs for today so a reload doesn't look like unfinished work
+    const today=S.auditRaw||'';
+    S.rcaLog.forEach(x=>{if(String(x.audit_date||'')===today&&x.lead_id&&!S.audits[x.lead_id])
+      S.audits[x.lead_id]={reason:x.reason||'',sev:x.severity||'',note:x.note||'',action:x.action||'No action needed'};});
+    render();
+  }catch(e){}
+}
+// per-team completion, straight off the shared log
+function doneByTl(tlEmail){const t=S.auditRaw||'';return (S.rcaLog||[]).filter(x=>String(x.audit_date||'')===t&&norm(x.tl_email)===norm(tlEmail)).length;}
+function mtdStats(){
+  const rows=S.rcaLog||[],me=norm((S.user&&S.user.email)||'');
+  const mon=(S.auditRaw||new Date().toISOString().slice(0,10)).slice(0,7);
+  const mine=rows.filter(x=>String(x.audit_date||'').slice(0,7)===mon&&norm(x.auditor_email)===me);
+  const days=new Set(mine.map(x=>String(x.audit_date||'').slice(0,10)));
+  return{logged:mine.length,days:days.size,month:mon};
+}
+
 // ---- role scoping ----
 // The queue is work TLs do. Everyone above them (ZSM, ADOS, RCA auditors, admin) sees what
 // the teams did with it, never a queue of their own.
@@ -356,7 +458,7 @@ function screensFor(){
   if(isTL()){out.push(['queue','Audit queue'],['adher','My adherence']);}
   if(isAud())out.push(['rca','RCA audit']);
   out.push(['mgr',isTL()?'Team view':'Team progress']);
-  if(S.role==='admin')out.push(['settings','Settings']);
+  if(S.role==='admin'||SAMPLE)out.push(['settings','Settings']);
   return out;
 }
 function render(){
@@ -364,64 +466,40 @@ function render(){
   const allow=screensFor().map(s=>s[0]);
   const scr=allow.includes(S.screen)?S.screen:allow[0];
   S.screen=scr;
-  el.innerHTML=nav()+(scr==='queue'?queueView():scr==='adher'?adherView():scr==='rca'?rcaView():scr==='settings'?settingsView():mgrView());
+  el.innerHTML=sampleBanner()+nav()+(scr==='queue'?queueView():scr==='adher'?adherView():scr==='rca'?rcaView():scr==='settings'?settingsView():mgrView());
 }
 function nav(){
   const meTl=TLS().find(t=>t.me);
   const uName=(S.user&&(S.user.name||S.user.email))||(meTl&&meTl.name)||'—';
-  const uPic=S.user&&S.user.picture;
   const roleLbl=ROLE_LABEL[S.role]||'Team Lead';
-  const sub=roleLbl+(meTl&&meTl.cluster?' · '+meTl.cluster:'');
-  const uIni=ini2(uName);
-  const seg=(id,lbl)=>`<label class="seg-opt" style="${S.screen===id?'background:var(--color-accent);color:var(--color-bg)':''}"><input type="radio" style="position:absolute;opacity:0" ${S.screen===id?'checked':''} data-act="nav" data-v="${id}">${lbl}</label>`;
-  const tabs=screensFor().map(s=>seg(s[0],s[1])).join('');
-  return `<nav class="wrap" style="display:flex;align-items:center;gap:18px;padding-top:18px;padding-bottom:10px">
-    <span class="nav-brand" style="display:flex;align-items:center;gap:11px;margin-right:0">
-      ${logoImg(22)}
-      <span style="width:1px;height:20px;background:var(--color-divider)"></span>
-      <span style="width:28px;height:28px;border-radius:999px;background:var(--color-accent);display:grid;place-items:center"><span style="width:11px;height:11px;border-radius:999px;border:2.6px solid var(--color-bg)"></span></span>Lead Sentinel</span>
-    <div class="seg" style="margin-left:6px">${tabs}</div>
-    <span style="flex:1"></span>
-    ${isTL()?`<span style="display:flex;align-items:center;gap:8px;padding:6px 14px;border-radius:999px;background:var(--color-surface);border:1px solid var(--color-divider)"><span style="width:8px;height:8px;border-radius:999px;background:var(--color-accent)"></span><span style="font-size:12.5px;font-weight:600;color:var(--color-accent-800)">Cutoff 7:00 PM · <span data-timer style="font-variant-numeric:tabular-nums">${cutoffLeft()}</span> left</span></span>`:''}
-    <span style="display:flex;align-items:center;gap:10px"><span style="display:flex;flex-direction:column;text-align:right;line-height:1.25"><span style="font-size:13px;font-weight:600">${esc(uName)}</span><span style="font-size:11px;color:${MUT(55)}">${esc(sub)}</span></span>${uPic?`<img src="${esc(uPic)}" alt="" style="width:38px;height:38px;border-radius:999px;object-fit:cover">`:`<span style="width:38px;height:38px;display:grid;place-items:center;border-radius:999px;background:var(--color-accent-200);color:var(--color-accent-800);font-weight:700;font-size:13px">${esc(uIni)}</span>`}${AUTH.enabled?`<button class="btn btn-ghost" data-act="signout" title="Sign out" style="padding:8px 10px;font-size:12px">Sign out</button>`:''}</span>
-  </nav>`;
+  const tab=(id,lbl)=>{const on=S.screen===id;
+    return `<button data-act="nav" data-v="${id}" style="background:none;border:none;padding:0 0 6px;cursor:pointer;font-family:var(--font-body);font-size:14.5px;color:${on?'var(--color-text)':MUT(50)};border-bottom:2px solid ${on?'var(--color-text)':'transparent'};font-weight:${on?'600':'400'}">${lbl}</button>`;};
+  return `<div class="wrap" style="display:flex;align-items:baseline;flex-wrap:wrap;column-gap:34px;row-gap:10px;padding-top:26px;padding-bottom:12px">
+    <span style="display:flex;align-items:baseline;gap:12px;flex:none">
+      ${logoImg(19)}
+      <span style="font-family:var(--font-heading);font-size:19px;font-weight:700;letter-spacing:-.01em">Lead Sentinel</span>
+    </span>
+    <span style="display:flex;gap:26px;align-items:baseline">${screensFor().map(s=>tab(s[0],s[1])).join('')}</span>
+    <span style="display:flex;align-items:baseline;flex-wrap:wrap;column-gap:22px;row-gap:6px;font-size:13px;color:${MUT(50)};min-width:0;margin-left:auto;justify-content:flex-end">
+      ${isTL()?`<span>Cutoff 7 PM · <span data-timer style="font-variant-numeric:tabular-nums;color:var(--color-text)">${cutoffLeft()}</span></span>`:''}
+      <span style="color:var(--color-text)">${esc(uName)} <span style="color:${MUT(42)}">· ${esc(roleLbl)}</span></span>
+      ${AUTH.enabled?`<button data-act="signout" style="background:none;border:none;padding:0;cursor:pointer;font-family:inherit;font-size:13px;color:${MUT(50)};text-decoration:underline">Sign out</button>`:''}
+    </span>
+  </div>
+  <div class="wrap" style="padding-top:0;padding-bottom:0"><div style="height:2px;background:var(--color-text)"></div></div>`;
 }
-function queueView(){
-  const total=L().length,done=audited(),pct=total?Math.round(done/total*100):0;
-  if(!total)return `<div class="wrap" style="padding:80px 0;animation:lsfade .25s ease">
-    <div style="max-width:52ch"><h2 style="margin:0 0 10px;font-size:30px">Nothing flagged today</h2>
-    <div style="font-size:14.5px;line-height:1.6;color:${MUT(62)}">No lead under your team has gone silent past its threshold, so there is no root-cause analysis to do. The queue refreshes with each morning's export.</div></div></div>`;
-  const tabs=CATS.map(c=>{const dl=catLeads(c.key),d=dl.filter(l=>rcaDone(l.id)).length,on=c.key===S.catKey;
-    return `<button class="btn" data-act="cat" data-v="${c.key}" style="padding:8px 14px;font-size:13px;${on?'background:var(--color-surface);border:1.5px solid var(--color-accent)':'background:transparent;border:1px solid var(--color-divider);color:'+MUT(78)}"><span style="width:10px;height:10px;border-radius:999px;background:${c.dot}"></span>${esc(c.name)}<span style="font-size:11px;font-weight:600;padding:1px 8px;border-radius:999px;background:${on?'var(--color-accent-200)':MUT(8)};color:${on?'var(--color-accent-800)':MUT(60)}">${d}/${dl.length}</span></button>`;}).join('');
-  const dl=catLeads(S.catKey);
-  const rows=dl.map(l=>{const lbl=rcaDone(l.id)?['RCA done','tag tag-accent-2']:['Pending','tag tag-neutral'],on=l.id===S.selId,p=prio(l.id);
-    return `<button data-act="lead" data-v="${l.id}" style="display:flex;align-items:center;gap:10px;width:100%;padding:12px 10px;border:none;border-bottom:1px solid var(--color-divider);border-radius:0;cursor:pointer;text-align:left;${on?'background:var(--color-surface);box-shadow:inset 2px 0 0 var(--color-accent)':'background:transparent'}">
-      <span style="min-width:0;flex:1;line-height:1.35"><span style="display:block;font-weight:600;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(l.name)}</span><span style="display:block;font-size:11.5px;color:${MUT(55)};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(l.LRM)} · ${esc(silentLbl(l))}</span></span>
-      <span style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex:none"><span style="font-size:10.5px;font-weight:700;color:${p.tier==='P1'?'var(--color-accent-800)':MUT(45)}">${p.tier}</span>${done0(l)?`<span style="font-size:10.5px;color:${MUT(40)}">done</span>`:''}</span></button>`;}).join('');
-  return `<div class="wrap" style="padding-bottom:44px;animation:lsfade .25s ease">
-    <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:24px;flex-wrap:wrap;padding:14px 0 18px">
-      <div><h2 style="margin:0;font-size:30px">Breach RCA queue</h2><div style="font-size:13.5px;color:${MUT(60)}">Friday, 25 Jul 2026 · confirmed breaches from the last 30 days · ${total} leads across 5 categories awaiting root-cause analysis</div></div>
-      <div style="display:flex;align-items:center;gap:14px"><span style="width:220px;height:10px;border-radius:999px;background:${MUT(9)};overflow:hidden"><span style="display:block;height:100%;width:${pct}%;background:var(--color-accent-2);border-radius:999px"></span></span><span style="font-size:12.5px;font-weight:600;white-space:nowrap">${done} / ${total} RCA done</span></div>
-    </div>
-    <div style="padding-bottom:16px"><button class="btn btn-secondary" data-act="rules" style="font-size:12.5px">How the system flags these breaches ${S.showRules?'▴':'▾'}</button>
-      ${S.showRules?`<div class="card elev-sm" style="margin-top:12px;padding:20px 22px"><div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px">${RULES.map(s=>`<div style="display:flex;flex-direction:column;gap:7px"><span style="display:flex;align-items:center;gap:9px"><span style="width:24px;height:24px;display:grid;place-items:center;border-radius:999px;background:var(--color-accent-2);color:var(--color-bg);font-size:12px;font-weight:700">${s[0]}</span><span style="font-weight:700;font-size:13.5px">${s[1]}</span></span><span style="font-size:12px;line-height:1.5;color:${MUT(68)}">${s[2]}</span></div>`).join('')}</div></div>`:''}</div>
-    <div style="display:flex;gap:10px;flex-wrap:wrap;padding-bottom:18px">${tabs}</div>
-    <div style="display:grid;grid-template-columns:296px 1fr;gap:22px;align-items:start">
-      <div style="display:flex;flex-direction:column;gap:0"><div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:${MUT(45)};padding:0 0 8px 10px">${esc(catObj(S.catKey).name)} · ${dl.length}</div>${rows}</div>
-      ${auditPanel()}
-    </div></div>`;
-}
+
 function whyStart(l){const f=WHYS[l.cat];return f?f(l):null;}
 function whyWalk(l){const root=whyStart(l);const idx=(S.audits[l.id]&&S.audits[l.id].whyIdx)||[];const steps=[];let node=root,terminal='';for(let k=0;k<idx.length;k++){const opt=node&&node.a[idx[k]];if(!opt)break;steps.push({q:node.q,opt});if(opt.root){terminal=opt.root;node=null;break;}node=opt.to;}return{steps,node,terminal};}
 function whyBlockHtml(l){
   const w=whyWalk(l);let h='';
   w.steps.forEach((s,i)=>{
-    h+=`<div style="display:flex;flex-direction:column;gap:7px"><div style="font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:${MUT(50)}">Why ${i+1}</div><div style="font-size:13px;line-height:1.45;color:${MUT(82)}">${esc(s.q)}</div><button data-act="whyBack" data-v="${i}" style="align-self:flex-start;display:inline-flex;align-items:center;gap:9px;padding:8px 13px;border-radius:999px;cursor:pointer;background:var(--color-accent);color:var(--color-bg);border:none;font-size:12.5px;font-weight:600"><span>${esc(s.opt.t)}</span><span style="opacity:.75;font-size:10.5px;font-weight:500">change</span></button></div>`;
+    h+=`<div><div style="font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:${MUT(40)};margin-bottom:5px">Why ${i+1}</div><div style="font-size:13.5px;line-height:1.5;color:${MUT(70)};margin-bottom:6px">${esc(s.q)}</div><button data-act="whyBack" data-v="${i}" style="background:none;border:none;padding:0;cursor:pointer;font-family:inherit;text-align:left;font-size:14.5px;font-weight:600;color:var(--color-text);border-bottom:1.5px solid var(--color-text)">${esc(s.opt.t)}</button></div>`;
   });
   if(w.node){
     const n=w.steps.length+1;
-    const opts=w.node.a.map((o,i)=>`<button class="btn" data-act="why" data-v="${i}" style="justify-content:flex-start;text-align:left;padding:11px 15px;font-size:13px;background:var(--color-surface);border:1.5px solid ${MUT(15)};color:var(--color-text);border-radius:13px">${esc(o.t)}${o.root?`<span style="margin-left:auto;padding-left:12px;font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:${MUT(45)}">root</span>`:''}</button>`).join('');
-    h+=`<div style="display:flex;flex-direction:column;gap:11px"><div style="font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--color-accent-800)">Why ${n}${n>=5?' \u00b7 root':''}</div><div style="font-size:15px;line-height:1.4;font-family:var(--font-heading)">${esc(w.node.q)}</div><div style="display:flex;flex-direction:column;gap:9px">${opts}</div></div>`;
+    const opts=w.node.a.map((o,i)=>`<button data-act="why" data-v="${i}" style="display:block;width:100%;text-align:left;background:none;border:none;border-bottom:1px solid var(--color-divider);padding:11px 0;cursor:pointer;font-family:inherit;font-size:14px;line-height:1.45;color:var(--color-text)">${esc(o.t)}${o.root?`<span style="float:right;padding-left:14px;font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:${MUT(38)}">root</span>`:''}</button>`).join('');
+    h+=`<div><div style="font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:${MUT(40)};margin-bottom:5px">Why ${n}${n>=5?' · root':''}</div><div style="font-family:var(--font-heading);font-size:18px;line-height:1.35;margin-bottom:8px">${esc(w.node.q)}</div><div style="border-top:1px solid var(--color-divider)">${opts}</div></div>`;
   }
   return h;
 }
@@ -431,12 +509,13 @@ const done0=l=>rcaDone(l.id);
 function activityBlock(l){
   const t=ACTLBL[l.lastType]||'Activity';
   const stale=(l.silent||0)>=3;
-  const cell=(k,v,sub,em)=>`<div style="min-width:0"><div style="font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:${MUT(45)};margin-bottom:4px">${k}</div><div style="font-size:14.5px;line-height:1.3;${em?'color:var(--color-accent-2-900);font-weight:600':''}">${v}</div>${sub?`<div style="font-size:11.5px;color:${MUT(50)};margin-top:2px">${sub}</div>`:''}</div>`;
-  return `<div style="display:grid;grid-template-columns:1.4fr 1fr 1fr;gap:22px;padding:16px 0;border-top:1px solid var(--color-divider);border-bottom:1px solid var(--color-divider)">
+  const cell=(k,v,sub,em)=>`<div style="min-width:0"><div style="font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:${MUT(40)};margin-bottom:5px">${k}</div><div style="font-size:15px;line-height:1.3;${em?'font-weight:600':''}">${v}</div>${sub?`<div style="font-size:12px;color:${MUT(48)};margin-top:3px">${sub}</div>`:''}</div>`;
+  return `<div style="display:grid;grid-template-columns:1.4fr 1fr 1fr;gap:34px;padding:18px 0;border-top:1px solid var(--color-text);border-bottom:1px solid var(--color-divider)">
     ${cell('Latest activity',esc(t),esc(fmtDT(l.lastAt)))}
     ${cell('Silence',esc(silentLbl(l)),l.lastAt?'since last signal':'no signal on record',stale)}
-    ${cell('Dials · 30d',(l.calls30||0)+' <span style="color:'+MUT(40)+'">/</span> '+(l.connects30||0)+'',(l.connects30||0)===0?'no connect ≥15s':'connected')}
-    <div style="grid-column:1/-1;font-size:12.5px;color:${MUT(60)}">${esc(LEAKLBL[l.leak]||'')}</div>
+    ${cell('Dials · 30d',(l.calls30||0)+' <span style="color:'+MUT(35)+'">/</span> '+(l.connects30||0),(l.connects30||0)===0?'no connect ≥15s':'connected')}
+    ${l.loops>=3?`<div style="grid-column:1/-1;font-size:13px;color:${MUT(55)};padding-top:4px">Call-later loop has turned ${l.loops} times without a confirmed meeting.</div>`:''}
+    ${LEAKLBL[l.leak]?`<div style="grid-column:1/-1;font-size:13px;color:${MUT(55)};padding-top:4px">${esc(LEAKLBL[l.leak])}</div>`:''}
   </div>`;
 }
 
@@ -470,81 +549,155 @@ async function recDrop(leadId){delete S.recs[leadId];await idbDel(leadId);render
 const AUDIO_ACCEPT='audio/*,.mp3,.wav,.m4a,.aac,.ogg,.oga,.opus,.flac,.wma,.amr,.3gp,.webm,.mp4,.caf,.aiff,.aif';
 function recordingBlock(l){
   const r=S.recs[l.id],busy=S.recBusy===l.id;
-  const head=`<div style="font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:${MUT(45)}">Call recording</div>`;
+  const head=`<div style="font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:${MUT(40)}">Call recording</div>`;
   if(busy)return `<div style="padding:16px 0;border-bottom:1px solid var(--color-divider)">${head}<div style="font-size:13px;color:${MUT(55)};margin-top:8px">Uploading…</div></div>`;
   if(r)return `<div style="padding:16px 0;border-bottom:1px solid var(--color-divider);display:flex;flex-direction:column;gap:10px">
-    <div style="display:flex;align-items:baseline;gap:12px">${head}<span style="flex:1"></span><span style="font-size:11px;color:${MUT(45)}">${esc(r.name)} · ${kb(r.size)} · ${r.remote?'uploaded':'on this device'}</span><button onclick="recDrop('${l.id}')" style="background:none;border:none;cursor:pointer;font-size:11.5px;color:${MUT(55)};text-decoration:underline;padding:0">Remove</button></div>
-    <audio controls preload="metadata" src="${esc(r.url)}" style="width:100%;height:36px"></audio>
+    <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap">${head}<span style="flex:1"></span><span style="font-size:11.5px;color:${MUT(42)}">${esc(r.name)} · ${kb(r.size)} · ${r.remote?'uploaded':'on this device'}</span><button onclick="recDrop('${l.id}')" style="background:none;border:none;cursor:pointer;font-size:11.5px;color:${MUT(52)};text-decoration:underline;padding:0;font-family:inherit">Remove</button></div>
+    <audio controls preload="metadata" src="${esc(r.url)}" style="width:100%;height:34px"></audio>
   </div>`;
   return `<div style="padding:16px 0;border-bottom:1px solid var(--color-divider);display:flex;align-items:center;gap:14px">${head}
     <span style="flex:1"></span>
-    <label style="cursor:pointer;font-size:12.5px;padding:7px 14px;border:1px solid ${MUT(22)};border-radius:2px">Upload audio<input type="file" accept="${AUDIO_ACCEPT}" onchange="recPick(this,'${l.id}')" style="display:none"></label>
+    <label style="cursor:pointer;font-size:13px;border-bottom:1px solid ${MUT(30)};padding-bottom:2px">Upload audio<input type="file" accept="${AUDIO_ACCEPT}" onchange="recPick(this,'${l.id}')" style="display:none"></label>
   </div>`;
+}
+
+function queueView(){
+  const total=L().length,done=audited();
+  if(!total)return `<div class="wrap" style="padding-top:96px;animation:lsfade .25s ease">
+    <h2 style="margin:0 0 12px;font-size:34px;font-weight:700">Nothing flagged today</h2>
+    <div style="font-size:15.5px;line-height:1.6;color:${MUT(60)};max-width:56ch;text-wrap:pretty">No lead under your team has gone silent past its threshold, so there is no root-cause analysis to do. The queue refreshes with each morning's export.</div></div>`;
+
+  const rail=CATS.map(c=>{const dl=catLeads(c.key),d=dl.filter(l=>rcaDone(l.id)).length,on=c.key===S.catKey;
+    return `<button data-act="cat" data-v="${c.key}" style="display:block;width:100%;text-align:left;background:none;border:none;padding:9px 0;cursor:pointer;font-family:inherit">
+      <span style="display:flex;align-items:baseline;gap:8px">
+        <span style="font-size:14px;line-height:1.35;color:${on?'var(--color-text)':MUT(58)};font-weight:${on?'600':'400'}">${esc(c.short||c.name)}</span>
+        <span style="flex:1"></span>
+        <span style="font-size:12.5px;font-variant-numeric:tabular-nums;color:${dl.length&&d===dl.length?MUT(32):MUT(55)}">${d}/${dl.length}</span>
+      </span>
+    </button>`;}).join('');
+
+  const dl=catLeads(S.catKey);
+  const rows=dl.map(l=>{const on=l.id===S.selId,dn=rcaDone(l.id);
+    return `<button data-act="lead" data-v="${l.id}" style="display:block;width:100%;text-align:left;background:none;border:none;border-bottom:1px solid var(--color-divider);padding:11px 14px 11px ${on?'12px':'14px'};cursor:pointer;font-family:inherit;${on?'border-left:2px solid var(--color-text)':''}">
+      <span style="display:block;font-size:14px;font-weight:${on?'600':'500'};color:${dn?MUT(45):'var(--color-text)'};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(l.name)}${dn?' <span style="font-weight:400">· done</span>':''}</span>
+      <span style="display:block;font-size:12px;color:${MUT(48)};margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(l.LRM)} · ${esc(silentLbl(l))}</span>
+    </button>`;}).join('');
+
+  return `<div class="wrap" style="padding-bottom:80px;animation:lsfade .25s ease">
+    <div style="display:flex;align-items:baseline;gap:20px;padding:32px 0 30px">
+      <h2 style="margin:0;font-size:34px;font-weight:700;letter-spacing:-.015em">Breach review</h2>
+      <span style="font-size:13.5px;color:${MUT(52)}">${esc(S.auditDate||'Today')} · ${done} of ${total} logged</span>
+      <span style="flex:1"></span>
+      <button data-act="rules" style="background:none;border:none;padding:0;cursor:pointer;font-family:inherit;font-size:13px;color:${MUT(52)};text-decoration:underline">${S.showRules?'Hide':'How leads are flagged'}</button>
+    </div>
+    ${S.showRules?`<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:34px;padding:0 0 34px;max-width:1100px">${RULES.map(s=>`<div><div style="font-family:var(--font-heading);font-size:15px;font-weight:700;margin-bottom:5px">${esc(s[1])}</div><div style="font-size:13px;line-height:1.55;color:${MUT(60)};text-wrap:pretty">${esc(s[2])}</div></div>`).join('')}</div>`:''}
+    <div style="display:grid;grid-template-columns:168px 252px minmax(0,1fr);gap:44px;align-items:start">
+      <div>
+        <div style="font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:${MUT(40)};padding-bottom:10px">Category</div>
+        ${rail}
+      </div>
+      <div>
+        <div style="font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:${MUT(40)};padding:0 0 10px 14px">${dl.length} lead${dl.length===1?'':'s'}</div>
+        <div style="border-top:1px solid var(--color-divider)">${rows}</div>
+      </div>
+      ${auditPanel()}
+    </div></div>`;
 }
 
 function auditPanel(){
   const l=L().find(x=>x.id===S.selId)||{timeline:[]};if(!l.id)return'<div></div>';
-  const cat=catObj(S.catKey),a=S.audits[l.id]||{},p=prio(l.id),dl=catLeads(S.catKey),rank=dl.findIndex(x=>x.id===l.id)+1;
-  const done=rcaDone(l.id),w=whyWalk(l),concluded=!!w.terminal;
-  const tl=l.timeline.map((r,i)=>{const dot=r.kind==='flag'?'width:17px;height:17px;border-radius:999px;background:var(--color-bg);border:3px solid var(--color-accent);box-shadow:0 0 0 4px var(--color-accent-100)':r.kind==='pending'?'width:14px;height:14px;border-radius:999px;background:transparent;border:2px solid '+MUT(26):'width:14px;height:14px;border-radius:999px;background:var(--color-accent-2)';
-    const conn=i>0?`<span style="flex:1;height:2px;margin-top:7px;min-width:20px;${r.kind==='done'?'background:var(--color-accent-2)':'background:repeating-linear-gradient(90deg,var(--color-accent) 0 6px,transparent 6px 12px)'}"></span>`:'';
-    return conn+`<span style="display:flex;flex-direction:column;align-items:center;gap:9px;width:96px;flex:none"><span style="${dot}"></span><span style="font-size:10.5px;line-height:1.4;text-align:center;color:${r.kind==='flag'?'var(--color-accent-800)':MUT(60)}">${esc(r.what)}<br><span style="opacity:.7">${esc(r.when)}</span></span></span>`;}).join('');
-  const factors=[['Urgency',p.urg],['LRM risk',p.repRisk]].map(f=>`<span style="display:flex;flex-direction:column;gap:4px;width:78px"><span style="display:flex;justify-content:space-between;gap:6px"><span style="font-size:10px;color:${MUT(55)}">${f[0]}</span><span style="font-size:10px;font-weight:700">${f[1]}</span></span><span style="height:5px;border-radius:999px;background:${MUT(9)};overflow:hidden"><span style="display:block;height:100%;width:${f[1]}%;background:var(--color-accent);border-radius:999px"></span></span></span>`).join('');
-  const sev=SEVS.map(s=>`<button class="btn" data-act="sev" data-v="${s[0]}" style="padding:8px 14px;font-size:12.5px;border:1.5px solid ${a.sev===s[0]?(s[0]==='high'?'var(--color-accent-700);background:var(--color-accent-200);color:var(--color-accent-800)':s[0]==='med'?'var(--color-accent);background:var(--color-accent-100);color:var(--color-accent-800)':'var(--color-accent-2);background:var(--color-accent-2-100);color:var(--color-accent-2-800)'):MUT(16)+';color:'+MUT(65)}">${s[1]}</button>`).join('');
-  const rcaBlock=`<div style="display:flex;flex-direction:column;gap:18px;background:var(--color-accent-100);border-radius:18px;padding:20px">
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px"><span style="font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--color-accent-800)">Root-cause drill-down · 5 Whys</span><span class="${done?'tag tag-accent-2':'tag tag-neutral'}">${done?'Root cause found ✓':'In progress'}</span></div>
-      <div style="display:flex;flex-direction:column;gap:16px">${whyBlockHtml(l)}</div>
-      ${concluded?`<div style="display:flex;gap:12px;background:var(--color-accent-2-100);border-radius:14px;padding:14px 16px;align-items:flex-start"><span style="width:26px;height:26px;flex:none;display:grid;place-items:center;border-radius:999px;background:var(--color-accent-2);color:var(--color-bg);font-weight:700;font-size:13px">✓</span><div style="line-height:1.45"><div style="font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--color-accent-2-800);margin-bottom:3px">Root cause</div><div style="font-size:14.5px;color:var(--color-accent-2-900)">${esc(w.terminal)}</div></div><span style="flex:1"></span><button class="btn" data-act="whyBack" data-v="0" style="font-size:11.5px;padding:6px 12px;align-self:center;border:1px solid ${MUT(20)}">Restart</button></div>
-      <div style="display:grid;grid-template-columns:1fr auto;gap:16px;align-items:end"><div class="field"><label>Corrective action</label><select class="input" data-act="action">${ACTIONS.map(o=>`<option ${a.action===o?'selected':''}>${esc(o)}</option>`).join('')}</select></div><div class="field"><label>Severity</label><div style="display:flex;gap:8px">${sev}</div></div></div>
-      <div class="field"><label>Coaching note to ${esc(l.LRM)}</label><textarea class="input" data-act="note" rows="2" placeholder="One clear line the LRM can act on…" style="min-height:auto;resize:none">${esc(a.note||'')}</textarea></div>`:''}</div>`;
-  const tagcls='tag '+(S.catKey==='mcch_past'||S.catKey==='mcch_future'?'tag-accent-2':'tag-accent');
-  return `<div class="card elev-sm" style="padding:0;overflow:hidden">
-    <div style="padding:22px 26px 18px;display:flex;align-items:flex-start;justify-content:space-between;gap:16px;border-bottom:1px solid var(--color-divider)">
-      <div style="display:flex;align-items:center;gap:14px"><div style="line-height:1.3"><div style="font-family:var(--font-heading);font-size:23px">${esc(l.name)}</div><div style="font-size:12.5px;color:${MUT(58)}">${esc(l.meta)} · LRM ${esc(l.LRM)}</div></div></div>
-      <span class="${tagcls}">${esc(cat.name)}</span></div>
-    <div style="padding:22px 26px;display:flex;flex-direction:column;gap:18px">
-      <div style="display:flex;gap:12px;padding:0 0 4px"><div style="line-height:1.5"><div style="font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:${MUT(45)};margin-bottom:3px">Breach recorded</div><div style="font-size:13.5px;color:${MUT(85)}">${esc(l.systemNote)}</div></div></div>
-      <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap"><span style="${tierStyle(p.tier,1)}">${p.tier} · score ${p.score}/100</span><span style="font-size:12px;color:${MUT(55)}">#${rank} of ${dl.length} by breach severity in this category</span><span style="flex:1;min-width:12px"></span><span style="display:flex;gap:12px">${factors}</span></div>
-      <div><div style="font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:${MUT(52)};margin-bottom:6px">What breached here</div><div style="font-size:14px;line-height:1.55;color:${MUT(88)}">${esc(cat.check)}</div></div>
-      ${activityBlock(l)}
-      ${recordingBlock(l)}
-      <details><summary style="font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:${MUT(50)};cursor:pointer">Full lead history</summary><div class="ls-scroll" style="display:flex;align-items:flex-start;overflow-x:auto;padding-top:16px">${tl}</div></details>
-      ${rcaBlock}
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px"><button class="btn btn-secondary" data-act="prev" style="font-size:13px">← Previous</button><span style="font-size:11.5px;color:${MUT(45)}">${done?'RCA submitted ✓':'Work through the 5 Whys to reach the root cause'}</span><button class="btn btn-primary" data-act="next">Submit RCA &amp; next →</button></div>
-    </div></div>`;
+  const cat=catObj(S.catKey),a=S.audits[l.id]||{},dl=catLeads(S.catKey),rank=dl.findIndex(x=>x.id===l.id)+1;
+  const w=whyWalk(l),concluded=!!w.terminal,done=rcaDone(l.id);
+  const kicker=t=>`<div style="font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:${MUT(40)};margin-bottom:8px">${t}</div>`;
+  const tl=(l.timeline||[]).map((r,i)=>{
+    const dot=r.kind==='done'?'width:9px;height:9px;border-radius:999px;background:var(--color-text)':r.kind==='miss'?'width:9px;height:9px;border-radius:999px;border:1.5px solid var(--color-accent-2)':'width:9px;height:9px;border-radius:999px;border:1.5px solid '+MUT(28);
+    const conn=i>0?`<span style="flex:1;height:1px;margin-top:4px;min-width:18px;background:${MUT(18)}"></span>`:'';
+    return conn+`<span style="display:flex;flex-direction:column;align-items:center;gap:8px;width:92px;flex:none"><span style="${dot}"></span><span style="font-size:11px;line-height:1.4;text-align:center;color:${MUT(58)}">${esc(r.label)}</span></span>`;}).join('');
+  const sev=SEVS.map(s=>`<button data-act="sev" data-v="${s[0]}" style="background:none;border:none;padding:0 0 3px;cursor:pointer;font-family:inherit;font-size:13.5px;color:${a.sev===s[0]?'var(--color-text)':MUT(45)};font-weight:${a.sev===s[0]?'600':'400'};border-bottom:1.5px solid ${a.sev===s[0]?'var(--color-text)':'transparent'}">${s[1]}</button>`).join('');
+
+  return `<div>
+    <div style="display:flex;align-items:baseline;gap:14px;flex-wrap:wrap">
+      <h3 style="margin:0;font-family:var(--font-heading);font-size:29px;font-weight:700;letter-spacing:-.01em">${esc(l.name)}</h3>
+      <span style="font-size:13px;color:${MUT(48)}">${esc(l.meta)}</span>
+    </div>
+    <div style="font-size:13.5px;color:${MUT(55)};padding:5px 0 0">LRM ${esc(l.LRM)} · ${esc(cat.name)} · ${rank} of ${dl.length} in this category</div>
+
+    <div style="padding:26px 0 22px;max-width:70ch">
+      ${kicker('What breached')}
+      <div style="font-size:16px;line-height:1.6;text-wrap:pretty">${esc(l.systemNote)}</div>
+      <div style="font-size:13.5px;line-height:1.6;color:${MUT(58)};padding-top:10px;text-wrap:pretty">${esc(cat.check)}</div>
+    </div>
+
+    ${activityBlock(l)}
+    ${recordingBlock(l)}
+    <details style="padding:16px 0;border-bottom:1px solid var(--color-divider)"><summary style="font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:${MUT(40)};cursor:pointer">Full lead history</summary><div class="ls-scroll" style="display:flex;align-items:flex-start;overflow-x:auto;padding-top:18px">${tl}</div></details>
+
+    <div style="padding:30px 0 0;border-top:none">
+      ${kicker('Root cause · five whys')}
+      <div style="display:flex;flex-direction:column;gap:20px;max-width:60ch">${whyBlockHtml(l)}</div>
+      ${concluded?`
+      <div style="padding:22px 0 0;margin-top:22px;border-top:1px solid var(--color-divider)">
+        ${kicker('Root cause')}
+        <div style="font-family:var(--font-heading);font-size:21px;line-height:1.3;max-width:44ch">${esc(w.terminal)}</div>
+        <button data-act="whyBack" data-v="0" style="background:none;border:none;padding:0;margin-top:8px;cursor:pointer;font-family:inherit;font-size:12.5px;color:${MUT(50)};text-decoration:underline">Start over</button>
+      </div>
+      <div style="display:flex;gap:56px;flex-wrap:wrap;padding:24px 0 0">
+        <div><div style="font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:${MUT(40)};margin-bottom:7px">Corrective action</div>
+          <select data-act="action" style="font-family:inherit;font-size:14px;padding:6px 0;border:none;border-bottom:1px solid ${MUT(28)};background:none;color:var(--color-text);min-width:24ch">${ACTIONS.map(o=>`<option ${a.action===o?'selected':''}>${esc(o)}</option>`).join('')}</select></div>
+        <div><div style="font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:${MUT(40)};margin-bottom:7px">Severity</div>
+          <div style="display:flex;gap:18px;padding-top:4px">${sev}</div></div>
+      </div>
+      <div style="padding:24px 0 0;max-width:64ch">
+        <div style="font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:${MUT(40)};margin-bottom:7px">Coaching note to ${esc(l.LRM)}</div>
+        <textarea data-act="note" rows="2" placeholder="One clear line the LRM can act on…" style="width:100%;font-family:inherit;font-size:14px;line-height:1.55;padding:6px 0;border:none;border-bottom:1px solid ${MUT(28)};background:none;color:var(--color-text);resize:none">${esc(a.note||'')}</textarea>
+      </div>`:''}
+    </div>
+
+    <div style="display:flex;align-items:baseline;gap:24px;padding:32px 0 0">
+      <button data-act="prev" style="background:none;border:none;padding:0;cursor:pointer;font-family:inherit;font-size:13.5px;color:${MUT(52)};text-decoration:underline">← Previous</button>
+      <span style="flex:1"></span>
+      <span style="font-size:12.5px;color:${MUT(45)}">${done?'Logged':'Work the whys to a root cause'}</span>
+      <button data-act="next" style="cursor:pointer;font-family:inherit;font-size:14px;font-weight:600;padding:10px 20px;border:1px solid var(--color-text);background:var(--color-text);color:var(--color-bg);border-radius:2px">Next lead →</button>
+    </div>
+  </div>`;
 }
+
 function adherView(){
-  const total=L().length,done=audited(),pct=total?Math.round(done/total*100):0,miss=total-done;
+  const total=L().length,done=audited(),miss=total-done;
   const actionsSet=L().filter(l=>{const x=S.audits[l.id];return x&&x.reason&&x.action&&x.action!=='No action needed';}).length;
   const hi=L().filter(l=>{const x=S.audits[l.id];return x&&x.reason&&x.sev==='high';}).length;
-  const mtdPct=MTD.total?Math.round(MTD.audited/MTD.total*100):0,mtdMiss=MTD.total-MTD.audited;
-  const cov=r=>r>=75?'var(--color-accent-2)':r>=40?'var(--color-accent)':'#b2622d';
-  const gaps=CATS.map(c=>{const dl=catLeads(c.key),d2=dl.filter(l=>rcaDone(l.id)).length,r=dl.length?Math.round(d2/dl.length*100):0;
-    return `<div style="display:flex;flex-direction:column;gap:6px"><div style="display:flex;justify-content:space-between;gap:10px"><span style="display:flex;align-items:center;gap:9px;font-size:13.5px;font-weight:600"><span style="width:10px;height:10px;border-radius:999px;background:${c.dot}"></span>${esc(c.name)}</span><span style="font-size:12.5px;color:${MUT(60)}">${d2} of ${dl.length} RCAs</span></div><span style="height:8px;border-radius:999px;background:${MUT(9)};overflow:hidden"><span style="display:block;height:100%;width:${r}%;background:${cov(r)};border-radius:999px"></span></span></div>`;}).join('');
-  const LRMs=R().map(r=>{const mine=L().filter(l=>l.LRM===r.name),sd=mine.filter(l=>rcaDone(l.id)).length,mx=Math.max(1,...r.trend),fl=r.trend.reduce((a,b)=>a+b,0);
-    const spark=r.trend.map(v=>`<span style="width:8px;border-radius:3px 3px 0 0;background:color-mix(in srgb,var(--color-accent) 70%,transparent);height:${Math.max(3,Math.round(v/mx*24))}px"></span>`).join('');
-    return `<div style="display:flex;align-items:center;gap:14px"><span style="width:34px;height:34px;flex:none;display:grid;place-items:center;border-radius:999px;background:var(--color-accent-200);color:var(--color-accent-800);font-size:12px;font-weight:700">${esc(r.ini)}</span><div style="flex:1;min-width:0"><div style="display:flex;justify-content:space-between;gap:8px"><span style="font-size:13.5px;font-weight:600">${esc(r.name)}</span><span style="font-size:12px;color:${MUT(55)};font-weight:600">${fl} flagged</span></div><div style="display:flex;align-items:flex-end;gap:4px;height:26px;margin-top:5px">${spark}</div></div><div style="text-align:right;line-height:1.2"><div style="font-family:var(--font-heading);font-size:19px">${sd}</div><div style="font-size:10.5px;color:${MUT(55)}">RCA'd</div></div></div>`;}).join('');
-  const ring=(deg,accent,val)=>`<span style="width:90px;height:90px;flex:none;border-radius:999px;background:conic-gradient(${accent} ${deg}deg, ${MUT(10)} 0);display:grid;place-items:center"><span style="width:68px;height:68px;border-radius:999px;background:var(--color-surface);display:grid;place-items:center"><span style="font-family:var(--font-heading);font-size:23px">${val}%</span></span></span>`;
-  return `<div class="wrap" style="padding-bottom:44px;animation:lsfade .25s ease">
-    <div style="padding:14px 0 20px"><h2 style="margin:0;font-size:30px">My adherence</h2><div style="font-size:13.5px;color:${MUT(60)}">Friday, 25 Jul 2026 · same-day cutoff at 7:00 PM — any breach without an RCA by then counts against you</div></div>
-    <div style="display:grid;grid-template-columns:1.7fr 1fr 1fr;gap:18px;padding-bottom:20px">
-      <div class="card elev-sm" style="padding:22px 24px;flex-direction:row;align-items:center;gap:22px;justify-content:space-around">
-        <div style="display:flex;align-items:center;gap:16px">${ring(Math.round(pct/100*360),'var(--color-accent-2)',pct)}<div style="line-height:1.35"><div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:${MUT(55)}">Today</div><div style="font-family:var(--font-heading);font-size:20px;margin-top:2px">${done} of ${total}</div><div style="font-size:12px;color:${MUT(60)}">${miss} open · <span data-timer style="font-variant-numeric:tabular-nums">${cutoffLeft()}</span> left</div></div></div>
-        <span style="width:1px;align-self:stretch;background:var(--color-divider)"></span>
-        <div style="display:flex;align-items:center;gap:16px">${ring(Math.round(mtdPct/100*360),'var(--color-accent)',mtdPct)}<div style="line-height:1.35"><div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:${MUT(55)}">Month to date</div><div style="font-family:var(--font-heading);font-size:20px;margin-top:2px">${MTD.audited} of ${MTD.total}</div><div style="font-size:12px;color:${MUT(60)}">${MTD.range} · ${mtdMiss} missed</div></div></div>
-      </div>
-      <div class="card elev-sm" style="padding:22px 24px;gap:12px"><div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:${MUT(55)}">This session</div><div style="display:flex;gap:12px"><div style="flex:1"><div style="font-family:var(--font-heading);font-size:30px;line-height:1;color:var(--color-accent-2-700)">${done}</div><div style="font-size:11.5px;color:${MUT(60)};margin-top:4px">RCAs logged</div></div><div style="flex:1"><div style="font-family:var(--font-heading);font-size:30px;line-height:1;color:var(--color-accent-700)">${actionsSet}</div><div style="font-size:11.5px;color:${MUT(60)};margin-top:4px">actions assigned</div></div><div style="flex:1"><div style="font-family:var(--font-heading);font-size:30px;line-height:1">${hi}</div><div style="font-size:11.5px;color:${MUT(60)};margin-top:4px">high severity</div></div></div></div>
-      <div class="card elev-sm" style="padding:22px 24px;gap:8px"><div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:${MUT(55)}">Data source</div><div style="font-size:13.5px;color:${MUT(75)};line-height:1.5">Live — /api/queue (Google Sheet)</div></div>
+  const mtd=mtdStats();
+  const stat=(v,lbl,s)=>`<div><div style="font-family:var(--font-heading);font-size:40px;line-height:1;font-weight:700">${v}</div><div style="font-size:13px;color:${MUT(55)};padding-top:6px">${lbl}</div>${s?`<div style="font-size:12px;color:${MUT(40)};padding-top:2px">${s}</div>`:''}</div>`;
+  const gaps=CATS.map(c=>{const dl=catLeads(c.key),d2=dl.filter(l=>rcaDone(l.id)).length;
+    return `<div style="display:flex;align-items:baseline;gap:12px;padding:9px 0;border-bottom:1px solid var(--color-divider)">
+      <span style="font-size:14px">${esc(c.name)}</span><span style="flex:1"></span>
+      <span style="font-size:13.5px;font-variant-numeric:tabular-nums;color:${dl.length&&d2===dl.length?MUT(38):'var(--color-text)'}">${d2} / ${dl.length}</span></div>`;}).join('');
+  const LRMs=R().map(r=>{const mine=L().filter(l=>l.LRM===r.name),sd=mine.filter(l=>rcaDone(l.id)).length;
+    return `<div style="display:flex;align-items:baseline;gap:12px;padding:9px 0;border-bottom:1px solid var(--color-divider)">
+      <span style="font-size:14px">${esc(r.name)}</span><span style="flex:1"></span>
+      <span style="font-size:13px;color:${MUT(48)}">${r.flagged} flagged</span>
+      <span style="font-size:13.5px;font-variant-numeric:tabular-nums;min-width:6ch;text-align:right">${sd} done</span></div>`;}).join('');
+  const emptyLrm=`<div style="padding:10px 0;font-size:13px;color:${MUT(45)}">No LRMs in today’s queue.</div>`;
+  return `<div class="wrap" style="padding-bottom:80px;animation:lsfade .25s ease">
+    <div style="padding:32px 0 30px">
+      <h2 style="margin:0;font-size:34px;font-weight:700;letter-spacing:-.015em">My adherence</h2>
+      <div style="font-size:13.5px;color:${MUT(52)};padding-top:4px">${esc(S.auditDate||'Today')} · same-day cutoff at 7 PM</div>
     </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px">
-      <div class="card elev-sm" style="padding:22px 24px;gap:16px"><div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:${MUT(55)}">RCA coverage by category</div>${gaps}</div>
-      <div class="card elev-sm" style="padding:22px 24px;gap:14px"><div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:${MUT(55)}">Per-LRM breach trend</div>${LRMs}</div>
+    <div style="display:flex;gap:64px;flex-wrap:wrap;padding-bottom:46px">
+      ${stat(done+' <span style="color:'+MUT(30)+'">/ '+total+'</span>','Logged today',miss?miss+' still open':(total?'all clear':''))}
+      ${stat(mtd.logged,'Logged this month','across '+mtd.days+' day'+(mtd.days===1?'':'s'))}
+      ${stat(actionsSet,'Actions assigned','')}
+      ${stat(hi,'High severity','')}
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:64px;align-items:start;max-width:1100px">
+      <div><div style="font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:${MUT(40)};padding-bottom:6px">Coverage by category</div><div style="border-top:1px solid var(--color-text)">${gaps}</div></div>
+      <div><div style="font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:${MUT(40)};padding-bottom:6px">By LRM</div><div style="border-top:1px solid var(--color-text)">${LRMs||emptyLrm}</div></div>
     </div></div>`;
 }
-function assigneesFor(origTl){const names=[origTl];TLS().forEach(t=>{if(t.name&&names.indexOf(t.name)<0)names.push(t.name);});RCA_SEEDS.forEach(s=>{if(s.tl&&names.indexOf(s.tl)<0)names.push(s.tl);});return names;}
+function assigneesFor(origTl){const names=[origTl];TLS().forEach(t=>{if(t.name&&names.indexOf(t.name)<0)names.push(t.name);});return names.filter(Boolean);}
 function rcaSubs(){
   const live=L().filter(l=>rcaDone(l.id)).map(l=>{const x=S.audits[l.id];return{id:'live-'+l.id,lead:l.name,LRM:l.LRM,tl:myTlName(),cat:l.cat,rca:x.reason,action:x.action,sev:x.sev||'med',when:'just now',live:true};});
-  return live.concat(RCA_SEEDS);
+  return live;
 }
 function rcaView(){
   const subs=rcaSubs();
@@ -610,19 +763,37 @@ function settingsView(){
 }
 function renderKeepFocus(sel){render();const el=document.querySelector(sel);if(el){el.focus();try{const n=el.value.length;el.setSelectionRange(n,n);}catch(e){}}}
 function mgrView(){
-  const done=audited(),hi=L().filter(l=>{const x=S.audits[l.id];return x&&x.reason&&x.sev==='high';}).length;
-  const rows=TLS().map(t=>{const tot=t.total||20,au=t.me?done:(t.simAudited!=null?t.simAudited:tot),dv=t.me?done:(t.simDev||0),h=t.me?hi:(t.simHigh||0),ad=Math.round(au/tot*100);
-    const cls=ad>=90?'tag tag-accent-2':ad>=70?'tag tag-neutral':'tag tag-outline';
-    return `<tr style="${t.me?'background:color-mix(in srgb,var(--color-accent) 8%,transparent)':''}"><td><span style="display:flex;align-items:center;gap:10px"><span style="width:30px;height:30px;flex:none;display:grid;place-items:center;border-radius:999px;background:${t.me?'var(--color-accent)':'var(--color-accent-200)'};color:${t.me?'var(--color-bg)':'var(--color-accent-800)'};font-size:11px;font-weight:700">${esc(t.ini)}</span><span style="font-weight:600">${esc(t.name)}</span></span></td><td style="color:${MUT(62)}">${esc(t.cluster)}</td><td style="text-align:center">${au}/${tot}</td><td style="text-align:center"><span class="${cls}">${ad}%</span></td><td style="text-align:center">${dv}</td><td style="text-align:center">${h}</td><td style="color:${MUT(75)}">${esc(t.topGap)}</td></tr>`;}).join('');
-  const allT=TLS().map(t=>{const tot=t.total||20,au=t.me?done:(t.simAudited!=null?t.simAudited:tot);return{name:t.name,total:tot,au};});
-  const tAu=allT.reduce((s,t)=>s+t.au,0),tTot=allT.reduce((s,t)=>s+t.total,0)||1;
-  const risk=allT.map(t=>{const open=t.total-t.au,dot=open>6?'#e0821a':open>0?'var(--color-accent)':'var(--color-accent-2)';return `<div style="display:flex;align-items:center;gap:12px"><span style="width:8px;height:8px;border-radius:999px;background:${dot};flex:none"></span><span style="flex:1;font-size:13.5px">${esc(t.name)} — ${open>0?(open+' of '+t.total+' RCAs open'):('all '+t.total+' RCA done')}</span><span class="${open>6?'tag tag-outline':open>0?'tag tag-accent':'tag tag-accent-2'}">${open>6?'At risk':open>0?'On track':'Done'}</span></div>`;}).join('');
-  const tcb={mcch_past:44,followup_missed:58,not_interested:39,not_qualified:33,mcch_future:27};
-  const tgaps=CATS.map(c=>{const r=tcb[c.key];return `<div style="display:flex;flex-direction:column;gap:6px"><div style="display:flex;justify-content:space-between;gap:10px"><span style="display:flex;align-items:center;gap:9px;font-size:13.5px;font-weight:600"><span style="width:10px;height:10px;border-radius:999px;background:${c.dot}"></span>${esc(c.name)}</span><span style="font-size:12.5px;color:${MUT(60)}">${r}% breach</span></div><span style="height:8px;border-radius:999px;background:${MUT(9)};overflow:hidden"><span style="display:block;height:100%;width:${r}%;background:${r>=50?'#b2622d':r>=25?'var(--color-accent)':'var(--color-accent-2)'};border-radius:999px"></span></span></div>`;}).join('');
-  return `<div class="wrap" style="padding-bottom:44px;animation:lsfade .25s ease">
-    <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:20px;flex-wrap:wrap;padding:14px 0 20px"><div><h2 style="margin:0;font-size:30px">Team-lead oversight</h2><div style="font-size:13.5px;color:${MUT(60)}">Friday, 25 Jul 2026 · RCA adherence and breaches across all TLs</div></div><div style="display:flex;gap:14px"><div style="text-align:right"><div style="font-family:var(--font-heading);font-size:24px">${Math.round(tAu/tTot*100)}%</div><div style="font-size:11px;color:${MUT(55)}">team adherence</div></div><div style="text-align:right"><div style="font-family:var(--font-heading);font-size:24px">${tTot-tAu}</div><div style="font-size:11px;color:${MUT(55)}">RCAs missed</div></div></div></div>
-    <div class="card elev-sm" style="padding:6px 22px 14px;margin-bottom:18px"><table class="table"><thead><tr><th>Team lead</th><th>Cluster</th><th style="text-align:center">RCA done</th><th style="text-align:center">Adherence</th><th style="text-align:center">RCAs logged</th><th style="text-align:center">High sev</th><th>Top breach category</th></tr></thead><tbody>${rows}</tbody></table></div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px"><div class="card elev-sm" style="padding:22px 24px;gap:16px"><div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:${MUT(55)}">Breach rate by category · team-wide</div>${tgaps}</div><div class="card elev-sm" style="padding:22px 24px;gap:14px"><div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:${MUT(55)}">RCA adherence risk · cutoff 7:00 PM</div>${risk}</div></div></div>`;
+  const tls=TLS();
+  const myTl=S.meEmail||null;
+  const catCount=(tl,k)=>((S.model&&S.model.leadsByTl[tl])||[]).filter(l=>l.cat===k).length;
+  const doneFor=tl=>doneByTl(tl);
+  const totAll=tls.reduce((s,t)=>s+t.total,0);
+  const rows=tls.map(t=>{
+    const tot=t.total,dn=doneFor(t.email),open=tot-dn,mine=t.email===myTl;
+    const td=`padding:11px 10px;border-bottom:1px solid var(--color-divider);font-variant-numeric:tabular-nums;text-align:right`;
+    return `<tr>
+      <td style="${td};text-align:left;padding-left:0"><span style="font-weight:600">${esc(t.name)}</span>${mine?`<span style="font-weight:400;color:${MUT(45)}"> · you</span>`:''}</td>
+      <td style="${td};text-align:left;color:${MUT(58)}">${esc(t.cluster||'—')}</td>
+      <td style="${td}">${tot}</td>
+      <td style="${td}">${dn}</td>
+      <td style="${td};${open?'':'color:'+MUT(32)}">${open||'—'}</td>
+      ${CATS.map(c=>`<td style="${td};color:${MUT(62)}">${catCount(t.email,c.key)||''}</td>`).join('')}
+    </tr>`;}).join('');
+  const catTot=CATS.map(c=>tls.reduce((s,t)=>s+catCount(t.email,c.key),0));
+  const doneAll=tls.reduce((s,t)=>s+doneFor(t.email),0);
+  const th=`padding:0 10px 9px;font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;font-weight:400;color:${MUT(45)};border-bottom:2px solid var(--color-text)`;
+  const head=`<tr><th style="${th};text-align:left;padding-left:0">Team lead</th><th style="${th};text-align:left">Cluster</th><th style="${th};text-align:right">To audit</th><th style="${th};text-align:right">Done</th><th style="${th};text-align:right">Open</th>${CATS.map(c=>`<th style="${th};text-align:right">${esc(c.short||c.name)}</th>`).join('')}</tr>`;
+  const tdf=`padding:11px 10px;border-bottom:1px solid var(--color-divider);font-variant-numeric:tabular-nums;text-align:right`;
+  const foot=`<tr><td style="${tdf};text-align:left;padding-left:0;font-weight:700;border-bottom:none;border-top:1px solid var(--color-text)">All teams</td><td style="${tdf};border-bottom:none;border-top:1px solid var(--color-text)"></td><td style="${tdf};font-weight:700;border-bottom:none;border-top:1px solid var(--color-text)">${totAll}</td><td style="${tdf};font-weight:700;border-bottom:none;border-top:1px solid var(--color-text)">${doneAll}</td><td style="${tdf};font-weight:700;border-bottom:none;border-top:1px solid var(--color-text)">${totAll-doneAll}</td>${catTot.map(n=>`<td style="${tdf};font-weight:700;border-bottom:none;border-top:1px solid var(--color-text)">${n||''}</td>`).join('')}</tr>`;
+  if(!tls.length)return `<div class="wrap" style="padding-top:96px"><h2 style="margin:0 0 12px;font-size:34px;font-weight:700">No teams in today’s queue</h2><div style="font-size:15.5px;line-height:1.6;color:${MUT(60)};max-width:56ch;text-wrap:pretty">Today’s export contains no flagged leads, so there is nothing to distribute across teams yet.</div></div>`;
+  return `<div class="wrap" style="padding-bottom:80px;animation:lsfade .25s ease">
+    <div style="padding:32px 0 30px">
+      <h2 style="margin:0;font-size:34px;font-weight:700;letter-spacing:-.015em">Team progress</h2>
+      <div style="font-size:13.5px;color:${MUT(52)};padding-top:4px">${esc(S.auditDate||'Today')} · ${totAll} flagged leads across ${tls.length} team${tls.length===1?'':'s'}</div>
+    </div>
+    <table style="width:100%;border-collapse:collapse;font-size:14px"><thead>${head}</thead><tbody>${rows}${foot}</tbody></table>
+    <div style="font-size:12.5px;line-height:1.6;color:${MUT(48)};max-width:76ch;padding-top:20px">Live from today’s queue and the shared RCA log. “Done” counts the latest logged RCA per lead${S.rcaPending?` · <b>${S.rcaPending} of yours still syncing</b>`:''}${S.rcaErr?` · <span style="color:var(--color-accent-2-700)">log write failing: ${esc(S.rcaErr)}</span>`:''}</div>
+  </div>`;
 }
 
 // ---- events ----
@@ -635,7 +806,7 @@ document.addEventListener('click',e=>{
   else if(act==='rules'){S.showRules=!S.showRules;render();}
   else if(act==='cat'){S.catKey=v;S.selId=(catLeads(v)[0]||{}).id;render();}
   else if(act==='lead'){S.selId=v;render();}
-  else if(act==='sev'){patch(S.selId,{sev:v});render();}
+  else if(act==='sev'){patch(S.selId,{sev:v});queueRca(S.selId);render();}
   else if(act==='why'){const l=L().find(x=>x.id===S.selId);if(!l)return;const idx=((S.audits[S.selId]&&S.audits[S.selId].whyIdx)||[]).slice();idx.push(+v);patch(S.selId,{whyIdx:idx});const w=whyWalk(l);if(w.terminal){patch(S.selId,{reason:w.terminal});if(!(S.audits[S.selId]&&S.audits[S.selId].sev))patch(S.selId,{sev:'med'});}else patch(S.selId,{reason:''});render();}
   else if(act==='whyBack'){const idx=((S.audits[S.selId]&&S.audits[S.selId].whyIdx)||[]).slice(0,+v);patch(S.selId,{whyIdx:idx,reason:''});render();}
   else if(act==='prev'){const dl=catLeads(S.catKey),i=dl.findIndex(x=>x.id===S.selId);S.selId=dl[(i-1+dl.length)%dl.length].id;render();}
@@ -647,8 +818,8 @@ document.addEventListener('click',e=>{
   else if(act==='auditorRemove'){ensureAuditors();S.rcaAuditors=S.rcaAuditors.filter(x=>x!==v);persistAuditors();render();}
 });
 document.addEventListener('change',e=>{const t=e.target.closest('[data-act]');if(!t)return;
-  if(t.dataset.act==='reason'){patch(S.selId,{reason:t.value});if(t.value&&!(S.audits[S.selId]&&S.audits[S.selId].sev))patch(S.selId,{sev:'med'});render();}
-  else if(t.dataset.act==='action')patch(S.selId,{action:t.value});
+  if(t.dataset.act==='reason'){patch(S.selId,{reason:t.value});if(t.value&&!(S.audits[S.selId]&&S.audits[S.selId].sev))patch(S.selId,{sev:'med'});queueRca(S.selId);render();}
+  else if(t.dataset.act==='action'){patch(S.selId,{action:t.value});queueRca(S.selId);}
   else if(t.dataset.act==='rcaAssignee'){patchRv(t.dataset.v,{assignee:t.value,notified:false});render();}
 });
 document.addEventListener('input',e=>{const t=e.target.closest('[data-act]');if(!t)return;
@@ -660,6 +831,7 @@ document.addEventListener('input',e=>{const t=e.target.closest('[data-act]');if(
 document.addEventListener('keydown',e=>{const t=e.target.closest&&e.target.closest('[data-act="auditorInput"]');if(t&&e.key==='Enter'){e.preventDefault();ensureAuditors();const em=(S.newAuditor||'').trim().toLowerCase();if(em&&!S.rcaAuditors.includes(em)){S.rcaAuditors=[...S.rcaAuditors,em];persistAuditors();}S.newAuditor='';render();}});
 
 setInterval(tickTimers,1000);
+setInterval(flushRca,20000);
 load();
 hydrateRecs();
 </script>
