@@ -142,6 +142,10 @@ async function getData() {
       calls_30d:             num(r.calls_30d),
       connects_30d:          num(r.connects_30d),
       leak_code:             r.leak_code || '',
+      loop_turns:            num(r.loop_turns),
+      mcch_events:           num(r.mcch_events),
+      dev_events:            num(r.dev_events),
+      lead_status:           r.lead_status || '',
       days_overdue:          num(r.days_overdue),
       priority_key:          num(r.priority_key),
       category_rank:         num(r.lrm_category_rank || r.category_rank),
@@ -186,4 +190,4 @@ async function getData() {
 // raise the serverless limit above Metabase's cold round-trip (needs Vercel Pro;
 // harmless on Hobby, which caps at 10s regardless). Set AFTER the handler assignment
 // so it isn't clobbered by `module.exports = handler`.
-module.exports.config = { maxDuration: 30 };
+module.exports.config = { maxDuration: 60 };
