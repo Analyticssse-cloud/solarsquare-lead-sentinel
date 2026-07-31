@@ -1,13 +1,16 @@
 // api/queue.js  ->  GET /api/queue
 //
-// Two feeds, joined on rep_email:
-//   1. Metabase Q4447   — the daily audit queue (audit_queue_daily.sql), pulled
-//                          live over the Metabase REST API. One row per sampled lead.
+// Two feeds, joined on lrm_email:
+//   1. Metabase Q4447   — the daily audit queue (audit_queue_daily_v2.sql), pulled
+//                          live over the Metabase REST API. The query does the
+//                          categorising and per-category ranking. It emits NO TL columns
+//                          and applies NO cap — the 4-per-category / 20-per-TL cap is
+//                          applied in the front-end, pooled across each TL's LRMs.
 //                          Falls back to a Sheets "Audit_Queue" tab if MB is unset.
-//   2. "LRM_TL_MAP"     — the dynamic LRM -> TL / ZSM / ADOS mapping sheet.
+//   2. "LRM_TL_MAP"     — the LRM -> TL / ZSM / ADOS mapping sheet: the source of truth
+//                          for every level above the LRM. Joined on lrm_email.
 //
-// Returns { queue, hierarchy, auditDate, source }. The front-end does the merge
-// + priority ranking + per-TL top-4 sampling.
+// Returns { queue, hierarchy, auditDate, source }.
 
 const { readSheet, toObjects } = require('./_sheets');
 const { fetchCardJson } = require('./_metabase');
@@ -75,11 +78,11 @@ function scopeForUser(full, user) {
   if (role === 'ados') tlSet = new Set(H.filter(h => h.ados_email === email).map(h => h.tl_email));
   if (role === 'none') tlSet = new Set(); // no team → empty (access-limited)
 
-  const repAllowed = new Set(
-    tlSet ? H.filter(h => tlSet.has(h.tl_email)).map(h => h.rep_email) : H.map(h => h.rep_email)
+  const lrmAllowed = new Set(
+    tlSet ? H.filter(h => tlSet.has(h.tl_email)).map(h => h.lrm_email) : H.map(h => h.lrm_email)
   );
   const inScope = tlSet
-    ? full.queue.filter(r => repAllowed.has(r.rep_email))
+    ? full.queue.filter(r => lrmAllowed.has(r.lrm_email))
     : full.queue;
   const hierScope = tlSet
     ? H.filter(h => tlSet.has(h.tl_email))
@@ -113,9 +116,9 @@ async function getData() {
 
     const queue = queueRaw.map(r => ({
       audit_date:            r.audit_date || '',
-      rep_id:                r.rep_id || '',
-      rep_name:              r.rep_name || '',
-      rep_email:             norm(r.rep_email),
+      lrm_id:                r.lrm_id || '',
+      lrm_name:              r.lrm_name || '',
+      lrm_email:             norm(r.lrm_email),
       lead_id:               r.lead_id || '',
       lead_object_id:        r.lead_object_id || '',
       customer_name:         r.customer_name || '',
@@ -131,19 +134,29 @@ async function getData() {
       status_changed_at:     r.status_changed_at || null,
       order_closed_at:       r.order_closed_at || null,
       attempt_today:         r.attempt_today === true || String(r.attempt_today).toLowerCase() === 'true',
+      // v3 — activity-driven detection
+      last_activity_at:      r.last_activity_at || null,
+      last_activity_type:    r.last_activity_type || '',
+      days_silent:           num(r.days_silent),
+      hours_silent:          num(r.hours_silent),
+      calls_30d:             num(r.calls_30d),
+      connects_30d:          num(r.connects_30d),
+      leak_code:             r.leak_code || '',
       days_overdue:          num(r.days_overdue),
-      category_rank:         num(r.category_rank),
+      priority_key:          num(r.priority_key),
+      category_rank:         num(r.lrm_category_rank || r.category_rank),
     })).filter(r => r.lead_id && r.category);
 
-    // ---- trim: keep only the top N most-overdue per (rep, category) ----
-    // the app samples 4/category/TL, so 12 gives ample headroom while capping payload
-    const PER = Number(process.env.PER_REP_CATEGORY || 12);
+    // ---- payload guard ----
+    // keep the top N candidates per (LRM, category) so every TL has enough to fill its
+    // 4-per-category picks and backfill; the real cap is applied in the front-end
+    const PER = Number(process.env.PER_LRM_CATEGORY || 12);
     const seen = {};
     const trimmed = queue
       .slice()
-      .sort((a, b) => b.days_overdue - a.days_overdue)
+      .sort((a, b) => (b.priority_key - a.priority_key) || (b.days_overdue - a.days_overdue))
       .filter(r => {
-        const k = r.rep_email + '|' + r.category;
+        const k = r.lrm_email + '|' + r.category;
         seen[k] = (seen[k] || 0) + 1;
         return seen[k] <= PER;
       });
@@ -151,8 +164,8 @@ async function getData() {
     // ---- hierarchy: LRM_TL_MAP sheet ----
     const mRaw = await readSheet(MAP_TAB).catch(() => []);
     const hierarchy = toObjects(mRaw).map(r => ({
-      rep_email:  norm(pick(r, ['Email IDs', 'Email ID', 'LRM Email', 'rep_email'])),
-      rep_name:   pick(r, ['LRM Name', 'Name', 'rep_name']),
+      lrm_email:  norm(pick(r, ['Email IDs', 'Email ID', 'LRM Email', 'lrm_email'])),
+      lrm_name:   pick(r, ['LRM Name', 'Name', 'lrm_name']),
       sseid:      pick(r, ['SSEID', 'SSE ID', 'sseid']),
       cluster:    pick(r, ['Cluster', 'City', 'cluster']),
       tl_email:   norm(pick(r, ['LRM TL Email ID', 'LRM TL', 'TL Email', 'tl_email'])),
@@ -162,7 +175,7 @@ async function getData() {
       ados_email: norm(pick(r, ['ADOS Email', 'ADOS', 'ados_email'])),
       ados_name:  pick(r, ['ADOS Name', 'ados_name']),
       hr_status:  pick(r, ['HR Status', 'Status', 'hr_status']) || 'Active',
-    })).filter(h => h.rep_email && h.hr_status.toLowerCase() !== 'inactive');
+    })).filter(h => h.lrm_email && h.hr_status.toLowerCase() !== 'inactive');
 
     const auditDate = (trimmed[0] && trimmed[0].audit_date) || new Date().toISOString().slice(0, 10);
     CACHE = { auditDate, source, queue: trimmed, hierarchy };
