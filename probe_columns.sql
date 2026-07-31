@@ -58,10 +58,36 @@ FROM lead
 WHERE "updatedAt" >= now() - interval '30 days'
 GROUP BY 1 ORDER BY n DESC LIMIT 40;
 
--- 6 · Sanity: how many leads actually get flagged, and in which category?
---     Run AFTER v4 parses. Zero rows in a category means its rule never matches —
---     which is a finding, not a pass.
--- (paste v4, replace its final SELECT with:)
+-- 7 · WHY ARE ALL DIAL COUNTS ZERO? 18,798 rows came back with every call count at 0,
+--     which means the Ozonetel join matches nothing. Run these in order — the first that
+--     returns 0 is the broken hop.
+
+--   7a · does ANY lead phone match ANY call_to? (no date bound, no filters)
+SELECT COUNT(*) AS matching_pairs
+FROM (SELECT RIGHT(REGEXP_REPLACE(COALESCE(customer_phone_number,''),'\D','','g'),10) AS ph10
+      FROM lead WHERE "updatedAt" >= now() - interval '7 days' LIMIT 2000) p
+JOIN ozonetel_call_logs c
+  ON RIGHT(REGEXP_REPLACE(COALESCE(c.call_to,''),'\D','','g'),10) = p.ph10
+WHERE c."createdAt" >= TO_CHAR(now() - interval '7 days','YYYY-MM-DD');
+
+--   7b · what does call_to actually look like? Is it even the customer's number?
+SELECT call_to, "createdAt"
+FROM ozonetel_call_logs
+WHERE "createdAt" >= TO_CHAR(now() - interval '2 days','YYYY-MM-DD')
+LIMIT 10;
+
+--   7c · is lrm_assigned_at parseable? If it is not ISO the bound goes NULL (harmless),
+--        but if it parses to a moment after the calls, every dial gets excluded.
+SELECT LEFT(lrm_assigned_at, 10) AS fmt, COUNT(*) AS n
+FROM lead
+WHERE lrm_assigned_at IS NOT NULL AND btrim(lrm_assigned_at) <> ''
+  AND "updatedAt" >= now() - interval '30 days'
+GROUP BY 1 ORDER BY n DESC LIMIT 10;
+
+-- 8 · Sanity check on v5: how many leads survive the new funnel + recency gates,
+--     and in which category? Paste v5 and replace its final SELECT with this.
 --   SELECT category, leak_code, COUNT(*) AS n,
---          ROUND(AVG(quiet_days), 1) AS avg_days_silent
---   FROM queue GROUP BY 1, 2 ORDER BY 1, 2;
+--          ROUND(AVG(quiet_days),1) AS avg_silent, ROUND(AVG(overdue_days),1) AS avg_overdue
+--   FROM queue GROUP BY 1,2 ORDER BY 1,2;
+--     Expect: all five categories present, avg_overdue in single/low-double digits,
+--     and a total in the hundreds — not 18,798.

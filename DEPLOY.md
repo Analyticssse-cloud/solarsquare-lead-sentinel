@@ -45,6 +45,29 @@ column names — see the lines marked `(A)` and `(D)` in the query, and run
 Both only ever make the tool *under*-report leaks, never over-report. Dial counts are
 already scoped to `>= lrm_assigned_at`, so a previous owner's calls can't leak in.
 
+### If the queue comes back empty
+
+Open `/api/debug` — it runs the app's own pull and returns a plain-English verdict. The
+app shows the same diagnosis inline on the empty-queue screen.
+
+The failure seen on 31 Jul is worth knowing: **Metabase card 4447 was emitting a blank
+`lrm_email` on every row.** With no LRM address nothing joins to the mapping sheet, no TL
+owns any lead, and every screen goes empty — while sign-in and role resolution work
+perfectly, which makes it look like a permissions problem. It isn't.
+
+Two things to keep in step:
+
+1. **The card must run the current query.** Card 4447 was still on an old version (36 rows,
+   three categories, no `lrm_email`). Update it to `audit_queue_daily_v5.sql`.
+2. **`QUEUE_TAB` must exist.** `Audit_Queue` was missing from the spreadsheet, so the sheet
+   fallback couldn't cover for the thin card. Create the tab — the Apps Script job does it
+   for you — or point `QUEUE_TAB` at the right name.
+
+The API now also resolves a missing `lrm_email` by matching `lrm_name` against the mapping
+sheet, so a thin card degrades instead of going blank. That is a safety net, not a fix:
+`/api/debug` reports how many rows relied on it, and any spelling difference still drops
+the lead.
+
 ---
 
 ## 1. Push to GitHub
@@ -82,11 +105,13 @@ git push
 | `GOOGLE_SA_EMAIL` | service-account email |
 | `GOOGLE_SA_KEY`   | full private key (keep the `\n` sequences, in quotes) |
 | `QUEUE_TAB`       | *(optional)* audit-export tab name — defaults to `Audit_Queue` |
-| `MAP_TAB`         | *(optional)* mapping tab name — defaults to `LRM_TL_MAP` |
+| `MAP_TAB`         | *(optional)* mapping tab name — defaults to `LRM_TL_MAP` (currently set to `EmployeeMaster`) |
 | `GOOGLE_CLIENT_ID`| OAuth client ID — **the moment this is set, sign-in is enforced** |
 | `ADMIN_EMAILS`    | comma-separated admins (see the Settings tab) |
 | `BLOB_READ_WRITE_TOKEN` | *(optional)* Vercel Blob token — enables server-side call-recording storage |
 | `OPENAI_API_KEY`  | *(not used — transcription is shelved for now)* |
+| `SHEET_ID`         | the org's shared mapping spreadsheet (`EmployeeMaster`) — **read only** |
+| `QUEUE_SHEET_ID`   | *(optional)* spreadsheet holding `Audit_Queue` / `Audit_Queue_Log`. Defaults to `SHEET_ID`; set it so the daily job never writes into the shared mapping file |
 | `RCA_SHEET_ID`    | spreadsheet the app writes the RCA log into — **must not** be the mapping sheet |
 | `RCA_TAB`         | *(optional)* RCA log tab name — defaults to `RCA_Log` |
 
@@ -138,11 +163,43 @@ or Google rejects the login with an `origin` error.
 
 ---
 
+## Which spreadsheet holds what
+
+Three distinct roles — keep them separate:
+
+| Spreadsheet | Env var | Tabs | App's access |
+|---|---|---|---|
+| The org's shared mapping sheet | `SHEET_ID` | `EmployeeMaster` | **read only, always** |
+| Lead Sentinel data | `QUEUE_SHEET_ID` | `Audit_Queue`, `Audit_Queue_Log`, `Run_Log` | read (Apps Script writes it) |
+| Lead Sentinel RCA log | `RCA_SHEET_ID` | `RCA_Log` | read + append |
+
+The last two can be the **same new spreadsheet** — simplest setup:
+
+1. Create one Google Sheet, e.g. *Lead Sentinel — Data*. Leave it empty.
+2. Share it with the service account (`GOOGLE_SA_EMAIL`) as **Editor**.
+3. Set both `QUEUE_SHEET_ID` and `RCA_SHEET_ID` to its id (the string in the URL between
+   `/d/` and `/edit`), and redeploy.
+4. Bind `apps-script/AuditQueueDaily.gs` to that same spreadsheet. It creates `Audit_Queue`
+   and `Audit_Queue_Log` on its first run — **nothing to create by hand.**
+
+`QUEUE_SHEET_ID` falls back to `SHEET_ID` when unset, which is why `Audit_Queue` was being
+looked for inside the mapping sheet and reported `Unable to parse range`. Setting it is
+what keeps the daily job out of a file other teams depend on.
+
 ## Wiring the daily export
 
 Point the same Apps Script that feeds the QA/LRM sheets at a new `Audit_Queue` tab:
-run `audit_queue_daily_v4.sql` in Metabase → CSV → clear-and-replace into `Audit_Queue`.
+run `audit_queue_daily_v5.sql` in Metabase → CSV → clear-and-replace into `Audit_Queue`
+(or let `apps-script/AuditQueueDaily.gs` do it on a daily trigger).
 The app reads whatever is in that tab on each request (300s edge cache).
+
+> **v5 is current.** v4 parsed but produced an unusable queue — 18,798 rows, 69% of them
+> already closed, median breach 304 days old, and both terminal categories never firing.
+> v5 adds the two gates it was missing: the lead must be **open** (not won/booked) and the
+> breach must be **recent** (14 days, tunable in the `cfg` CTE at the top). It also routes
+> not-interested / not-qualified off the real stage strings, stops flagging completed
+> meetings as missed, and tests terminal branches before meeting branches.
+> v2–v4 are kept for reference and are superseded.
 
 > **v4 is current.** It expresses the lead-journey flowchart directly: each of the five
 > branches (MLS/MD, CNC, call-later loop, LI, NQ) maps to a leak code L0–L4, and a lead is
