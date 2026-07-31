@@ -1,10 +1,13 @@
 const { google } = require('googleapis');
 
-const SHEET_ID = process.env.SHEET_ID;
-// Writes go to their OWN spreadsheet. The sheet the org shared for LRM→TL mapping is
-// read-only reference data — the app must never append to it. Set RCA_SHEET_ID to a
-// spreadsheet created for Lead Sentinel; if it is unset, writes are refused outright
-// rather than silently landing in the mapping file.
+// THREE spreadsheet roles, deliberately separate:
+//   SHEET_ID        the org's shared mapping sheet (EmployeeMaster). READ ONLY, always.
+//   QUEUE_SHEET_ID  where the daily audit queue lands. Defaults to SHEET_ID for backwards
+//                   compatibility, but should be the app's own file so the Apps Script job
+//                   never has to write into a sheet other teams depend on.
+//   RCA_SHEET_ID    where the app writes completed RCAs. Never falls back to anything.
+const SHEET_ID       = process.env.SHEET_ID;
+const QUEUE_SHEET_ID = process.env.QUEUE_SHEET_ID || process.env.SHEET_ID;
 const WRITE_SHEET_ID = process.env.RCA_SHEET_ID || '';
 
 function getAuth(readonly) {
@@ -25,6 +28,15 @@ async function readSheet(range) {
   const auth   = getAuth(true);
   const sheets = google.sheets({ version: 'v4', auth });
   const res    = await sheets.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range });
+  return res.data.values || [];
+}
+
+// Read the queue tab, wherever it lives. Falls back to the mapping spreadsheet when
+// QUEUE_SHEET_ID is unset, so an existing deploy keeps working unchanged.
+async function readQueueSheet(range) {
+  const auth   = getAuth(true);
+  const sheets = google.sheets({ version: 'v4', auth });
+  const res    = await sheets.spreadsheets.values.get({ spreadsheetId: QUEUE_SHEET_ID, range });
   return res.data.values || [];
 }
 
@@ -89,4 +101,5 @@ function toObjects(rows) {
   });
 }
 
-module.exports = { readSheet, toObjects, ensureTab, appendRows, readWriteSheet, WRITE_SHEET_ID };
+module.exports = { readSheet, readQueueSheet, toObjects, ensureTab, appendRows, readWriteSheet,
+                   WRITE_SHEET_ID, QUEUE_SHEET_ID, SHEET_ID };

@@ -12,7 +12,7 @@
 //
 // Returns { queue, hierarchy, auditDate, source }.
 
-const { readSheet, toObjects } = require('./_sheets');
+const { readSheet, readQueueSheet, toObjects } = require('./_sheets');
 const { fetchCardJson } = require('./_metabase');
 const { requireUser, deny, parseList } = require('./_auth');
 
@@ -24,6 +24,9 @@ const QUEUE_TAB = process.env.QUEUE_TAB || 'Audit_Queue';
 const MAP_TAB   = process.env.MAP_TAB   || 'LRM_TL_MAP';
 
 const norm = e => String(e || '').trim().toLowerCase().replace('@homes.solarsquare.in', '@solarsquare.in');
+
+// Loose name key for the email fallback: case/punctuation/extra-space insensitive.
+const nameKey = n => String(n || '').toLowerCase().replace(/[^a-z]+/g, ' ').trim();
 
 // pull the first present header from a row object
 function pick(o, keys) {
@@ -91,6 +94,8 @@ function scopeForUser(full, user) {
   return {
     auditDate: full.auditDate,
     source: full.source,
+    resolvedByName: full.resolvedByName || 0,
+    unresolved: full.unresolved || 0,
     user, role, meEmail,
     queue: inScope,
     hierarchy: hierScope,
@@ -109,7 +114,7 @@ async function getData() {
   } catch (e) {
     console.warn('Metabase pull failed, falling back to sheet:', e.message);
     source = 'sheet';
-    queueRaw = toObjects(await readSheet(QUEUE_TAB).catch(() => []));
+    queueRaw = toObjects(await readQueueSheet(QUEUE_TAB).catch(() => []));
   }
 
   const num = v => Number(String(v == null ? '' : v).replace(/,/g, '')) || 0;
@@ -119,6 +124,7 @@ async function getData() {
       lrm_id:                r.lrm_id || '',
       lrm_name:              r.lrm_name || '',
       lrm_email:             norm(r.lrm_email),
+      lrm_name:              r.lrm_name || '',
       lead_id:               r.lead_id || '',
       lead_object_id:        r.lead_object_id || '',
       customer_name:         r.customer_name || '',
@@ -174,7 +180,7 @@ async function getData() {
         return seen[k] <= PER;
       });
 
-    // ---- hierarchy: LRM_TL_MAP sheet ----
+    // ---- hierarchy: the mapping sheet ----
     const mRaw = await readSheet(MAP_TAB).catch(() => []);
     const hierarchy = toObjects(mRaw).map(r => ({
       lrm_email:  norm(pick(r, ['Email IDs', 'Email ID', 'LRM Email', 'lrm_email'])),
@@ -190,8 +196,25 @@ async function getData() {
       hr_status:  pick(r, ['HR Status', 'Status', 'hr_status']) || 'Active',
     })).filter(h => h.lrm_email && h.hr_status.toLowerCase() !== 'inactive');
 
+    // ---- name fallback ----
+    // The Metabase card can emit a blank lrm_email (its users join misses, or that
+    // account's `emails` is empty). A row with no email joins to nothing and becomes
+    // invisible to every TL — the queue silently shrinks to zero, which is exactly what
+    // /api/debug caught. When the email is missing but the name is present, resolve it
+    // against the mapping sheet by name so the lead still reaches its TL. Counted in
+    // `resolvedByName` so this can never quietly paper over a broken card.
+    const byName = {};
+    hierarchy.forEach(h => { const k = nameKey(h.lrm_name); if (k && !byName[k]) byName[k] = h.lrm_email; });
+    let resolvedByName = 0, unresolved = 0;
+    trimmed.forEach(r => {
+      if (r.lrm_email) return;
+      const hit = byName[nameKey(r.lrm_name)];
+      if (hit) { r.lrm_email = hit; r.lrm_email_source = 'name'; resolvedByName++; }
+      else unresolved++;
+    });
+
     const auditDate = (trimmed[0] && trimmed[0].audit_date) || new Date().toISOString().slice(0, 10);
-    CACHE = { auditDate, source, queue: trimmed, hierarchy };
+    CACHE = { auditDate, source, queue: trimmed, hierarchy, resolvedByName, unresolved };
     CACHE_AT = Date.now();
     return CACHE;
 }
