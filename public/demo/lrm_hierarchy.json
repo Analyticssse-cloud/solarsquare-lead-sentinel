@@ -1,7 +1,7 @@
 [
  {
-  "rep_email": "sakshi.jadhav@solarsquare.in",
-  "rep_name": "Sakshi Jadhav",
+  "lrm_email": "sakshi.jadhav@solarsquare.in",
+  "lrm_name": "Sakshi Jadhav",
   "sseid": "SSE3000",
   "cluster": "Pune",
   "tl_email": "amit.jaiswar@solarsquare.in",
@@ -11,8 +11,8 @@
   "hr_status": "Active"
  },
  {
-  "rep_email": "tejal.p@solarsquare.in",
-  "rep_name": "Tejal Pakhale",
+  "lrm_email": "tejal.p@solarsquare.in",
+  "lrm_name": "Tejal Pakhale",
   "sseid": "SSE3001",
   "cluster": "Pune",
   "tl_email": "amit.jaiswar@solarsquare.in",
@@ -22,8 +22,8 @@
   "hr_status": "Active"
  },
  {
-  "rep_email": "akshada.t@solarsquare.in",
-  "rep_name": "Akshada Tribhuwan",
+  "lrm_email": "akshada.t@solarsquare.in",
+  "lrm_name": "Akshada Tribhuwan",
   "sseid": "SSE3002",
   "cluster": "Pune",
   "tl_email": "amit.jaiswar@solarsquare.in",
@@ -33,8 +33,8 @@
   "hr_status": "Active"
  },
  {
-  "rep_email": "manasi.jagtap@solarsquare.in",
-  "rep_name": "Manasi Jagtap",
+  "lrm_email": "manasi.jagtap@solarsquare.in",
+  "lrm_name": "Manasi Jagtap",
   "sseid": "SSE3003",
   "cluster": "Pune",
   "tl_email": "amit.jaiswar@solarsquare.in",
@@ -44,8 +44,8 @@
   "hr_status": "Active"
  },
  {
-  "rep_email": "gaurav.nagpure@solarsquare.in",
-  "rep_name": "Gaurav Nagpure",
+  "lrm_email": "gaurav.nagpure@solarsquare.in",
+  "lrm_name": "Gaurav Nagpure",
   "sseid": "SSE3004",
   "cluster": "Pune",
   "tl_email": "amit.jaiswar@solarsquare.in",
@@ -55,8 +55,8 @@
   "hr_status": "Active"
  },
  {
-  "rep_email": "poonam.yadav@solarsquare.in",
-  "rep_name": "Poonam Yadav",
+  "lrm_email": "poonam.yadav@solarsquare.in",
+  "lrm_name": "Poonam Yadav",
   "sseid": "SSE3005",
   "cluster": "Pune",
   "tl_email": "amit.jaiswar@solarsquare.in",
@@ -66,8 +66,8 @@
   "hr_status": "Active"
  },
  {
-  "rep_email": "khushi.piplewar@solarsquare.in",
-  "rep_name": "Khushi Piplewar",
+  "lrm_email": "khushi.piplewar@solarsquare.in",
+  "lrm_name": "Khushi Piplewar",
   "sseid": "SSE3006",
   "cluster": "Indore",
   "tl_email": "unnati.dahikar@solarsquare.in",
@@ -77,8 +77,8 @@
   "hr_status": "Active"
  },
  {
-  "rep_email": "kalpesh.chachare@solarsquare.in",
-  "rep_name": "Kalpesh Chachare",
+  "lrm_email": "kalpesh.chachare@solarsquare.in",
+  "lrm_name": "Kalpesh Chachare",
   "sseid": "SSE3007",
   "cluster": "Indore",
   "tl_email": "unnati.dahikar@solarsquare.in",
@@ -88,8 +88,8 @@
   "hr_status": "Active"
  },
  {
-  "rep_email": "uday.jain@solarsquare.in",
-  "rep_name": "Uday Jain",
+  "lrm_email": "uday.jain@solarsquare.in",
+  "lrm_name": "Uday Jain",
   "sseid": "SSE3008",
   "cluster": "Indore",
   "tl_email": "unnati.dahikar@solarsquare.in",
@@ -99,8 +99,8 @@
   "hr_status": "Active"
  },
  {
-  "rep_email": "jayesh.chouhan@solarsquare.in",
-  "rep_name": "Jayesh Chouhan",
+  "lrm_email": "jayesh.chouhan@solarsquare.in",
+  "lrm_name": "Jayesh Chouhan",
   "sseid": "SSE3009",
   "cluster": "Indore",
   "tl_email": "unnati.dahikar@solarsquare.in",
@@ -110,8 +110,8 @@
   "hr_status": "Active"
  },
  {
-  "rep_email": "vrunda.jagtap@solarsquare.in",
-  "rep_name": "Vrunda Jagtap",
+  "lrm_email": "vrunda.jagtap@solarsquare.in",
+  "lrm_name": "Vrunda Jagtap",
   "sseid": "SSE3010",
   "cluster": "Lucknow",
   "tl_email": "prabhat.samal@solarsquare.in",
@@ -121,8 +121,8 @@
   "hr_status": "Active"
  },
  {
-  "rep_email": "megha.rai@solarsquare.in",
-  "rep_name": "Megha Rai",
+  "lrm_email": "megha.rai@solarsquare.in",
+  "lrm_name": "Megha Rai",
   "sseid": "SSE3011",
   "cluster": "Lucknow",
   "tl_email": "prabhat.samal@solarsquare.in",
@@ -132,8 +132,8 @@
   "hr_status": "Active"
  },
  {
-  "rep_email": "saloni.singh@solarsquare.in",
-  "rep_name": "Saloni Singh",
+  "lrm_email": "saloni.singh@solarsquare.in",
+  "lrm_name": "Saloni Singh",
   "sseid": "SSE3012",
   "cluster": "Lucknow",
   "tl_email": "prabhat.samal@solarsquare.in",
@@ -143,8 +143,8 @@
   "hr_status": "Active"
  },
  {
-  "rep_email": "ashutosh.mittal@solarsquare.in",
-  "rep_name": "Ashutosh Mittal",
+  "lrm_email": "ashutosh.mittal@solarsquare.in",
+  "lrm_name": "Ashutosh Mittal",
   "sseid": "SSE3013",
   "cluster": "Lucknow",
   "tl_email": "prabhat.samal@solarsquare.in",
