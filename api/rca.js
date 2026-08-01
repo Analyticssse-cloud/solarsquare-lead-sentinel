@@ -23,6 +23,10 @@ const HEADER = [
   'auditor_email', 'auditor_name',
   'reason', 'severity', 'action', 'note', 'why_path', 'assignee',
   'what', 'why', 'owner', 'fault', 'action_status',
+  // The call recording the TL attached while doing the RCA. Without these two the
+  // audio was written to blob storage and then orphaned — nothing in the log pointed
+  // at it, so a Quality auditor opening the RCA had no way to hear the call.
+  'recording_url', 'recording_name',
 ];
 
 const clean = v => String(v === undefined || v === null ? '' : v).replace(/[\r\n\t]+/g, ' ').slice(0, 900);
