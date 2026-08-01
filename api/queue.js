@@ -15,6 +15,8 @@
 const { readSheet, readQueueSheet, toObjects } = require('./_sheets');
 const { fetchCardJson } = require('./_metabase');
 const { requireUser, deny, parseList } = require('./_auth');
+const access = require('./access');
+const mapping = require('./mapping');
 
 // warm-cache the whole pull so repeat loads are instant and never re-hit Metabase
 let CACHE = null, CACHE_AT = 0;
@@ -52,7 +54,10 @@ module.exports = async (req, res) => {
   }
 
   try {
-    const full = await getData();                       // cached full pull
+    // ?fresh=1 skips the warm cache — the app sends it right after an admin saves a
+    // mapping or access change, so the effect is visible immediately instead of in 5 min.
+    const fresh = /(?:\?|&)fresh=1(?:&|$)/.test(req.url || '');
+    const full = await getData(fresh);                  // cached full pull
     const scoped = scopeForUser(full, user);            // role-based slice
     res.setHeader('Cache-Control', 'private, max-age=0, must-revalidate');
     return res.status(200).json(scoped);
@@ -64,12 +69,21 @@ module.exports = async (req, res) => {
 
 // Determine a user's role from the hierarchy and return only the data they may see.
 function scopeForUser(full, user) {
-  if (!user) return { ...full, role: 'demo', user: null, meEmail: null };
+  if (!user) return { ...full, role: 'none', user: null, meEmail: null };
   const email = String(user.email || '').toLowerCase();
   const admins = parseList(process.env.ADMIN_EMAILS);
   const H = full.hierarchy || [];
+  const ov = (full.overrides || {})[email] || null;
+
   let role = 'none', meEmail = null;
-  if (admins.indexOf(email) >= 0) role = 'admin';
+  // Explicit overrides win over the org chart — that is the point of them. 'none' blocks
+  // an account the chart would otherwise admit.
+  if (ov && ov.role === 'none') role = 'blocked';
+  else if (admins.indexOf(email) >= 0 || (ov && ov.role === 'admin')) role = 'admin';
+  else if (ov && ov.role === 'auditor') role = 'auditor';
+  else if (ov && ov.role === 'zsm') role = 'zsm';
+  else if (ov && ov.role === 'ados') role = 'ados';
+  else if (ov && ov.role === 'tl') { role = 'tl'; meEmail = email; }
   else if (H.some(h => h.tl_email === email)) { role = 'tl'; meEmail = email; }
   else if (H.some(h => h.zsm_email === email)) role = 'zsm';
   else if (H.some(h => h.ados_email === email)) role = 'ados';
@@ -79,7 +93,11 @@ function scopeForUser(full, user) {
   if (role === 'tl')  tlSet = new Set([email]);
   if (role === 'zsm') tlSet = new Set(H.filter(h => h.zsm_email === email).map(h => h.tl_email));
   if (role === 'ados') tlSet = new Set(H.filter(h => h.ados_email === email).map(h => h.tl_email));
-  if (role === 'none') tlSet = new Set(); // no team → empty (access-limited)
+  if (role === 'none' || role === 'blocked') tlSet = new Set();
+  // an overridden zsm/ados/auditor with no reporting lines of their own sees everything,
+  // otherwise the grant would be meaningless
+  if (ov && ['zsm', 'ados', 'auditor'].indexOf(ov.role) >= 0 && tlSet && !tlSet.size) tlSet = null;
+  if (role === 'auditor') tlSet = tlSet || null;
 
   const lrmAllowed = new Set(
     tlSet ? H.filter(h => tlSet.has(h.tl_email)).map(h => h.lrm_email) : H.map(h => h.lrm_email)
@@ -96,6 +114,12 @@ function scopeForUser(full, user) {
     source: full.source,
     resolvedByName: full.resolvedByName || 0,
     excludedUnmapped: full.excludedUnmapped || 0,
+    // Admins get the list of LRMs the mapping doesn't know, so they can give them a TL
+    // from inside Settings instead of waiting on an EmployeeMaster edit.
+    unmappedLrms: role === 'admin' ? (full.unmappedLrms || []) : [],
+    mappingOverrides: role === 'admin' ? (full.mappingOverrides || {}) : {},
+    auditors: Object.keys(full.overrides || {}).filter(e => (full.overrides[e].role === 'auditor')),
+    overrideRole: ov ? ov.role : '',
     user, role, meEmail,
     queue: inScope,
     hierarchy: hierScope,
@@ -103,8 +127,8 @@ function scopeForUser(full, user) {
 }
 
 // Fetch + build the FULL dataset once, cached in warm memory for 5 min.
-async function getData() {
-  if (CACHE && Date.now() - CACHE_AT < CACHE_TTL) return CACHE;
+async function getData(fresh) {
+  if (!fresh && CACHE && Date.now() - CACHE_AT < CACHE_TTL) return CACHE;
 
   // ---- audit rows: Metabase Q4447 first, Sheets tab as fallback ----
   let queueRaw = [];
@@ -168,7 +192,7 @@ async function getData() {
 
     // ---- hierarchy: the mapping sheet ----
     const mRaw = await readSheet(MAP_TAB).catch(() => []);
-    const hierarchy = toObjects(mRaw).map(r => ({
+    const hierarchyBase = toObjects(mRaw).map(r => ({
       lrm_email:  norm(pick(r, ['Email IDs', 'Email ID', 'LRM Email', 'lrm_email'])),
       lrm_name:   pick(r, ['LRM Name', 'Name', 'lrm_name']),
       sseid:      pick(r, ['SSEID', 'SSE ID', 'sseid']),
@@ -181,6 +205,13 @@ async function getData() {
       ados_name:  pick(r, ['ADOS Name', 'ados_name']),
       hr_status:  pick(r, ['HR Status', 'Status', 'hr_status']) || 'Active',
     })).filter(h => h.lrm_email && h.hr_status.toLowerCase() !== 'inactive');
+
+    // ---- reporting-line overrides (Mapping_Overrides tab, edited in Settings) ----
+    // EmployeeMaster stays read-only; this patches it. An LRM present only in the
+    // override tab is added outright, which is how an admin maps someone HR hasn't
+    // filed yet.
+    const mappingOverrides = await mapping.readMappingOverrides().catch(() => ({}));
+    const hierarchy = mapping.applyOverrides(hierarchyBase, mappingOverrides);
 
     // ---- name fallback (before scoping, so a nameable row still finds its TL) ----
     // The card can emit a blank lrm_email when an LRM's users record has no address.
@@ -207,6 +238,18 @@ async function getData() {
       .filter(r => !r.lrm_email || !mapped.has(r.lrm_email))
       .map(r => r.lrm_email || ('(no email) ' + (r.lrm_name || '?'))))];
 
+    // Same set, but with the name and the number of leads stranded behind it — that is
+    // what makes the Settings list actionable rather than a wall of addresses.
+    const stranded = {};
+    todayOnly.forEach(r => {
+      if (r.lrm_email && mapped.has(r.lrm_email)) return;
+      const k = r.lrm_email || ('name:' + (r.lrm_name || '?'));
+      const e = stranded[k] || (stranded[k] = { lrm_email: r.lrm_email || '', lrm_name: r.lrm_name || '', cluster: r.cluster || '', leads: 0 });
+      e.leads++;
+      if (!e.cluster && r.cluster) e.cluster = r.cluster;
+    });
+    const unmappedLrms = Object.values(stranded).sort((a, b) => b.leads - a.leads).slice(0, 400);
+
     // ---- payload guard ----
     // keep the top N candidates per (LRM, category) so every TL has enough to fill its
     // 4-per-category picks and backfill; the real cap is applied in the front-end
@@ -222,8 +265,10 @@ async function getData() {
       });
 
     const auditDate = (trimmed[0] && trimmed[0].audit_date) || new Date().toISOString().slice(0, 10);
-    CACHE = { auditDate, source, queue: trimmed, hierarchy,
-              resolvedByName, excludedUnmapped, excludedLrms };
+    // access overrides are tiny and change rarely; read them with the same cache
+    const overrides = await access.readOverrides().catch(() => ({}));
+    CACHE = { auditDate, source, queue: trimmed, hierarchy, overrides, mappingOverrides,
+              resolvedByName, excludedUnmapped, excludedLrms, unmappedLrms };
     CACHE_AT = Date.now();
     return CACHE;
 }
