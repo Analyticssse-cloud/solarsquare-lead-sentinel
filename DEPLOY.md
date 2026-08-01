@@ -285,3 +285,42 @@ api/
 package.json
 vercel.json
 ```
+
+
+---
+
+## Reporting lines and access, edited in the app
+
+Two admin-only routes, both writing to tabs on the app's own spreadsheet (`RCA_SHEET_ID`).
+EmployeeMaster is never written to.
+
+| Route | Tab | What it owns |
+| --- | --- | --- |
+| `/api/access` | `Access_Overrides` | who may open which screen (admin / auditor / tl / zsm / ados / none) |
+| `/api/mapping` | `Mapping_Overrides` | who an LRM reports to — TL, and the ZSM/ADOS that come with them |
+
+Both are read by `/api/queue`, which layers them over EmployeeMaster when it builds the
+hierarchy. An LRM present only in `Mapping_Overrides` is **added** to the org — that is how
+an admin rescues the LRMs whose leads are currently dropped for want of a team lead
+(**Settings → Unmapped LRMs**, with a bulk assign).
+
+Optional env: `MAPPING_TAB` (default `Mapping_Overrides`), `ACCESS_TAB` (default `Access_Overrides`).
+
+After a save the app re-pulls `/api/queue?fresh=1`, which bypasses the 5-minute warm cache,
+so the change is visible immediately rather than at the next cache expiry.
+
+## Apps Script v2 — what to do after pasting it
+
+`apps-script/AuditQueueDaily.gs` was rewritten for speed (roughly 3-5 min → 25-45 s on
+~10,600 rows). Two setup steps matter:
+
+1. **Services → add “Google Sheets API”** (identifier `Sheets`). Writes then go through the
+   REST API in 5,000-row batches instead of `SpreadsheetApp`. Without it the script still
+   works, logs a warning, and runs on the slow path.
+2. **Run `reindexLog()` once** after the upgrade. v2 remembers where today's rows sit in
+   `Audit_Queue_Log` (Script Property `LOG_INDEX`) so a refresh can replace them with one
+   `deleteRows` call instead of reading the whole log. Re-run it any time the log is edited
+   by hand.
+
+`benchmark()` times the Metabase pull and the row shaping and writes the breakdown to
+`Run_Log` without touching the data — use it to see where a slow run is actually going.
