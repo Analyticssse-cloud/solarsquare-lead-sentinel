@@ -1,4 +1,4 @@
-# SolarSquare Lead Sentinel — Vercel Deploy
+# SolarSquare Lead Review — Vercel Deploy
 
 ## First-run checklist
 
@@ -112,7 +112,7 @@ First time only:
 cd lead-sentinel-vercel
 git init
 git add .
-git commit -m "lead sentinel"
+git commit -m "lead review"
 git branch -M main
 git remote add origin https://github.com/Analyticssse-cloud/solarsquare-lead-sentinel.git
 git push -u origin main
@@ -204,12 +204,12 @@ Three distinct roles — keep them separate:
 | Spreadsheet | Env var | Tabs | App's access |
 |---|---|---|---|
 | The org's shared mapping sheet | `SHEET_ID` | `EmployeeMaster` | **read only, always** |
-| Lead Sentinel data | `QUEUE_SHEET_ID` | `Audit_Queue`, `Audit_Queue_Log`, `Run_Log` | read (Apps Script writes it) |
-| Lead Sentinel RCA log | `RCA_SHEET_ID` | `RCA_Log` | read + append |
+| Lead Review data | `QUEUE_SHEET_ID` | `Audit_Queue`, `Audit_Queue_Log`, `Run_Log` | read (Apps Script writes it) |
+| Lead Review RCA log | `RCA_SHEET_ID` | `RCA_Log` | read + append |
 
 The last two can be the **same new spreadsheet** — simplest setup:
 
-1. Create one Google Sheet, e.g. *Lead Sentinel — Data*. Leave it empty.
+1. Create one Google Sheet, e.g. *Lead Review — Data*. Leave it empty.
 2. Share it with the service account (`GOOGLE_SA_EMAIL`) as **Editor**.
 3. Set both `QUEUE_SHEET_ID` and `RCA_SHEET_ID` to its id (the string in the URL between
    `/d/` and `/edit`), and redeploy.
@@ -255,7 +255,7 @@ adherence, and the RCA-audit tab all read it.
 
 Setup, once:
 
-1. Create a new Google Sheet — e.g. *Lead Sentinel — RCA Log*. Leave it empty.
+1. Create a new Google Sheet — e.g. *Lead Review — RCA Log*. Leave it empty.
 2. Share it with the service account (`GOOGLE_SA_EMAIL`) as **Editor**.
 3. Set `RCA_SHEET_ID` in Vercel to its id (the long string in the sheet URL between
    `/d/` and `/edit`), and redeploy.
