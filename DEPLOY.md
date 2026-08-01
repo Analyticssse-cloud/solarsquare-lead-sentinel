@@ -5,7 +5,7 @@
 Three things gate real data. Until all three are done the app runs but the queue is empty.
 
 - [ ] **1. Metabase card runs the current query.** Card `4447` → edit → replace the SQL with
-      `audit_queue_daily_v6.sql` → Save. Confirm the result grid has an `lrm_email` column
+      `audit_queue_daily_v7.sql` → Save. Confirm the result grid has an `lrm_email` column
       with addresses in it — a blank one is the failure that empties every screen. Also confirm
       `lead_stage` is populated: v6 reads it from the newest `lead_stage_status_audit_history`
       row, and a blank column means that CTE found nothing.
@@ -28,7 +28,7 @@ The tool reads **two tabs** from the Google Sheet and merges them on `lrm_email`
 | `LRM_TL_MAP`  | LRM → TL / ZSM / ADOS mapping (dynamic) | maintained for the QA / LRM dashboards — **read only, never written to** |
 
 The daily job is `apps-script/AuditQueueDaily.gs` — same pattern as the IVR master sheet:
-log in to Metabase, run the saved card (`audit_queue_daily_v6.sql`), append to
+log in to Metabase, run the saved card (`audit_queue_daily_v7.sql`), append to
 `Audit_Queue_Log`, and refresh `Audit_Queue`. It trims the log past `KEEP_DAYS` (120).
 
 **Scheduling.** Set the script timezone to IST (Project Settings), then run
@@ -94,7 +94,7 @@ perfectly, which makes it look like a permissions problem. It isn't.
 Two things to keep in step:
 
 1. **The card must run the current query.** Card 4447 was still on an old version (36 rows,
-   three categories, no `lrm_email`). Update it to `audit_queue_daily_v6.sql`.
+   three categories, no `lrm_email`). Update it to `audit_queue_daily_v7.sql`.
 2. **`QUEUE_TAB` must exist.** `Audit_Queue` was missing from the spreadsheet, so the sheet
    fallback couldn't cover for the thin card. Create the tab — the Apps Script job does it
    for you — or point `QUEUE_TAB` at the right name.
@@ -225,7 +225,7 @@ what keeps the daily job out of a file other teams depend on.
 ## Wiring the daily export
 
 Point the same Apps Script that feeds the QA/LRM sheets at a new `Audit_Queue` tab:
-run `audit_queue_daily_v6.sql` in Metabase → CSV → clear-and-replace into `Audit_Queue`
+run `audit_queue_daily_v7.sql` in Metabase → CSV → clear-and-replace into `Audit_Queue`
 (or let `apps-script/AuditQueueDaily.gs` do it on a daily trigger).
 The app reads whatever is in that tab on each request (300s edge cache).
 
