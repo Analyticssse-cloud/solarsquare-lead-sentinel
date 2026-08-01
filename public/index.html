@@ -185,7 +185,7 @@ const first1=n=>String(n||'').split(' ')[0];
 const fmtD=iso=>{if(!iso)return'';const d=new Date(iso);return isNaN(d)?'':d.getDate()+' '+MON[d.getMonth()];};
 const fmtDT=iso=>{if(!iso)return'\u2014';const d=new Date(iso);if(isNaN(d))return'\u2014';let h=d.getHours(),m=String(d.getMinutes()).padStart(2,'0'),ap=h<12?'AM':'PM';h=h%12||12;return d.getDate()+' '+MON[d.getMonth()]+', '+h+':'+m+' '+ap;};
 const ACTLBL={call:'Call logged',stage_change:'Stage changed',meeting_done:'Meeting marked done',followup_set:'Follow-up set',crm_touch:'CRM record edited',none:'No activity ever recorded'};
-const LEAKLBL={L1:'Meeting date passed, nothing since',L2:'Marked CNC, never re-dialled',L3:'Call-later loop turning, no close',L4:'Closed with no connected call',L4b:'Closed \u2014 check the reason',L0:'Watch only'};const silentLbl=l=>{if(l.lastAt==null)return'never touched';const h=l.hoursSilent||0;if(h<24)return h<=1?'active this hour':h+'h silent';return (l.silent||Math.round(h/24))+'d silent';};
+const LEAKLBL={L1:'Meeting date passed, nothing since',L2:'Marked CNC, never re-dialled',L3:'Call-later loop turning, no close',L4:'Closed with no connected call',L4b:'Closed \u2014 check the reason',L5:'DEV started, no meeting ever done',L0:'Watch only'};const silentLbl=l=>{if(l.lastAt==null)return'never touched';const h=l.hoursSilent||0;if(h<24)return h<=1?'active this hour':h+'h silent';return (l.silent||Math.round(h/24))+'d silent';};
 const catObj=k=>CATS.find(c=>c.key===k);
 
 const S={screen:'queue',mtdLvl:'tl',rcaRange:'today',rcaFilter:'pending',rcaTouched:{},actFilter:'open',actBusy:'',recs:{},recBusy:null,rcaLog:[],rcaPending:0,rcaErr:'',diag:null,diagState:'',access:null,accessBusy:'',accessErr:'',accessFilter:'all',newAccessEmail:'',newAccessRole:'auditor',
@@ -551,12 +551,17 @@ function rcaPayload(leadId){
   const a=S.audits[leadId]||{};if(!a.reason)return null;
   const w=r3Walk(l),path=[w.s1&&w.s1.t,w.s2&&w.s2.t,w.root].filter(Boolean).join(' → ');
   const h=(S.hier||[]).find(x=>norm(x.lrm_email)===norm(l.lrmEmail||''))||{};
+  const rec=S.recs[leadId]||null;
   return{audit_date:S.auditRaw||'',lead_id:leadId,customer_name:l.name||'',category:l.cat,
     lrm_email:l.lrmEmail||'',lrm_name:l.LRM||'',
     tl_email:l.tlEmail||h.tl_email||'',tl_name:l.tlName||h.tl_name||'',
     auditor_email:(S.user&&S.user.email)||'',auditor_name:(S.user&&S.user.name)||'',
     reason:a.reason,severity:a.sev||'',action:a.action||'',note:a.note||'',why_path:path,assignee:'',
     what:(w.s1&&w.s1.t)||'',why:(w.s2&&w.s2.t)||'',owner:a.owner||'',fault:a.fault||'',
+    // Carry the recording into the log. Only a REMOTE url is worth logging — a blob:
+    // URL is a handle to this browser's memory and is meaningless to anyone else.
+    recording_url:(rec&&rec.remote&&rec.url)||'',
+    recording_name:(rec&&rec.remote&&rec.name)||'',
     action_status:a.action==='No action needed'?'n/a':(a.action_status||'open')};
 }
 function queueRca(leadId){
@@ -1298,6 +1303,8 @@ function rcaSubs(){
         mine:norm(x.auditor_email||'')===norm((S.user&&S.user.email)||S.meEmail||''),
         owner:(OWNERS.find(function(o){return o[0]===x.owner;})||['','\u2014'])[1],
         fault:x.fault||'coachable',
+        rec:x.recording_url||'',
+        recName:x.recording_name||'',
         when:d===today?'today':fmtD(d),
         live:d===today};
     });
@@ -1306,6 +1313,31 @@ function rcaSubs(){
 // on every Accept click — so this list must be BOUNDED, not just sorted. Default scope is
 // what the auditor is actually here to do: today's pending reviews.
 const RCA_SHOW=100;
+
+// ---- the auditor's copy of the call recording -------------------------------------
+// Two sources, in order: the url logged with the RCA, and — for RCAs logged before
+// recording_url existed, or where the upload landed after the RCA was submitted — a
+// lookup against the blob store by lead id. The lookup is lazy and cached: rcaView()
+// re-runs on every click, so a fetch per card per render would flood the endpoint.
+const RECLOOK={};
+function recLookup(leadId){
+  if(RECLOOK[leadId]!==undefined)return RECLOOK[leadId];
+  RECLOOK[leadId]=null;
+  fetch('/api/recording?lead='+encodeURIComponent(leadId),{headers:authHeaders()})
+    .then(r=>r.ok?r.json():null)
+    .then(j=>{const f=j&&j.files&&j.files[0];
+      if(f&&f.url){RECLOOK[leadId]={url:f.url,name:f.name};render();}})
+    .catch(()=>{});
+  return null;
+}
+function recRow(s){
+  const found=s.rec?{url:s.rec,name:s.recName}:(SAMPLE?null:recLookup(s.leadId));
+  const lbl='<div style="font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:'+MUT(50)+';white-space:nowrap">Call recording</div>';
+  if(!found)return `<div style="display:flex;align-items:center;gap:12px;padding:2px 2px 0">${lbl}<span style="font-size:12.5px;color:${MUT(42)}">Not attached — review is on the CRM trail only</span></div>`;
+  return `<div style="display:flex;align-items:center;gap:14px;padding:2px 2px 0;flex-wrap:wrap">${lbl}
+    <audio controls preload="none" src="${esc(found.url)}" style="flex:1;min-width:240px;height:32px"></audio>
+    <a href="${esc(found.url)}" download style="font-size:12px;color:${MUT(55)}">Download</a></div>`;
+}
 function rcaView(){
   const all=rcaSubs();
   const rv=id=>S.rcaReview[id]||{};
@@ -1355,6 +1387,7 @@ function rcaView(){
         <div style="display:flex;align-items:center;gap:12px"><span style="width:40px;height:40px;flex:none;display:grid;place-items:center;border-radius:999px;background:var(--color-accent-200);color:var(--color-accent-800);font-size:13px;font-weight:700">${esc(ini2(s.LRM))}</span><div style="line-height:1.3"><div style="font-weight:600;font-size:15px">${esc(s.lead)}${s.mine?` <span style="font-size:10px;font-weight:700;color:var(--color-accent);margin-left:4px">· yours</span>`:''}</div><div style="font-size:12px;color:${MUT(55)}">${esc(s.LRM)} · TL ${esc(s.tl)} · ${esc(s.when)}</div></div></div>
         <div style="display:flex;gap:8px;align-items:center;flex:none"><span class="${catcls}">${esc(c?c.name:s.cat)}</span><span style="font-size:10px;font-weight:700;padding:2px 9px;border-radius:999px;white-space:nowrap;${sm[1]}">${sm[0]}</span></div></div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;background:var(--color-bg);border:1px solid var(--color-divider);border-radius:14px;padding:14px 16px"><div><div style="font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:${MUT(50)};margin-bottom:4px">Root cause logged</div><div style="font-size:13.5px">${esc(s.rca)}</div></div><div><div style="font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:${MUT(50)};margin-bottom:4px">Action · owner</div><div style="font-size:13.5px">${esc(s.action)}</div><div style="font-size:12px;color:${MUT(50)};margin-top:3px">${esc(s.owner||'—')}</div></div></div>
+      ${recRow(s)}
       <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;border-top:1px solid var(--color-divider);padding-top:14px"><span style="font-size:13px;font-weight:600">Is this RCA done correctly?</span><button class="btn" data-act="rcaAccept" data-v="${s.id}" style="${accStyle}"><span style="margin-right:6px">✓</span>Accept RCA</button><button class="btn" data-act="rcaRework" data-v="${s.id}" style="${rewStyle}"><span style="margin-right:6px">↺</span>Needs rework</button><span style="flex:1"></span><span class="${statl[1]}">${statl[0]}</span></div>
       ${noteBlock}</div>`;}).join('');
   return `<div class="wrap" style="max-width:1100px;padding-bottom:44px;animation:lsfade .25s ease">
