@@ -18,7 +18,7 @@ const { requireUser, deny } = require('./_auth');
 const RCA_TAB = process.env.RCA_TAB || 'RCA_Log';
 
 const HEADER = [
-  'logged_at', 'audit_date', 'lead_id', 'category',
+  'logged_at', 'audit_date', 'lead_id', 'customer_name', 'category',
   'lrm_email', 'lrm_name', 'tl_email', 'tl_name',
   'auditor_email', 'auditor_name',
   'reason', 'severity', 'action', 'note', 'why_path', 'assignee',
@@ -89,7 +89,7 @@ module.exports = async (req, res) => {
 
     const now = new Date().toISOString();
     const rows = valid.map(i => [
-      now, clean(i.audit_date), clean(i.lead_id), clean(i.category),
+      now, clean(i.audit_date), clean(i.lead_id), clean(i.customer_name), clean(i.category),
       clean(i.lrm_email), clean(i.lrm_name), clean(i.tl_email), clean(i.tl_name),
       clean(who.email || i.auditor_email), clean(who.name || i.auditor_name),
       clean(i.reason), clean(i.severity), clean(i.action), clean(i.note),
