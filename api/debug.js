@@ -34,6 +34,7 @@ module.exports = async (req, res) => {
       METABASE_PASS:     !!process.env.METABASE_PASS,
       METABASE_CARD:     process.env.METABASE_CARD || '4447 (default)',
       GOOGLE_CLIENT_ID:  !!process.env.GOOGLE_CLIENT_ID,
+      BLOB_READ_WRITE_TOKEN: !!process.env.BLOB_READ_WRITE_TOKEN,
       ADMIN_EMAILS:      (process.env.ADMIN_EMAILS || '').split(',').filter(Boolean).length,
     },
     tabs: { MAP_TAB, QUEUE_TAB },
@@ -77,6 +78,43 @@ module.exports = async (req, res) => {
     }
   } catch (e) {
     out.metabase = { ok: false, error: String(e.message || e) };
+  }
+
+  // ---- call recordings: is the blob store actually reachable from THIS deployment? ----
+  // A missing token here almost never means "no store". It means the store exists but the
+  // running deployment was built before the variable was added, or the variable was scoped
+  // to Production only. Both are invisible in the Vercel dashboard, hence this probe.
+  const blobTok = process.env.BLOB_READ_WRITE_TOKEN;
+  if (!blobTok) {
+    out.recordings = {
+      ok: false,
+      reason: 'BLOB_READ_WRITE_TOKEN is not visible to this function',
+      deploymentEnv: process.env.VERCEL_ENV || 'unknown',
+      fix: [
+        'Vercel -> Storage: confirm a Blob store exists AND is connected to this project (Storage tab of the project, not just the team).',
+        'Vercel -> Settings -> Environment Variables: BLOB_READ_WRITE_TOKEN must be ticked for the environment named in deploymentEnv above (' + (process.env.VERCEL_ENV || 'unknown') + '), not Production only.',
+        'REDEPLOY after either change. Environment variables are baked in at build time, so the live deployment keeps running without it until you rebuild. Do NOT use the Redeploy checkbox "Use existing Build Cache" if the variable still does not appear.',
+      ],
+    };
+  } else {
+    try {
+      const r = await fetch('https://blob.vercel-storage.com?limit=1', {
+        headers: { authorization: 'Bearer ' + blobTok, 'x-api-version': '7' },
+      });
+      const body = await r.text();
+      out.recordings = r.ok
+        ? { ok: true, deploymentEnv: process.env.VERCEL_ENV || 'unknown',
+            tokenTail: '…' + blobTok.slice(-6),
+            storeReachable: true,
+            blobsVisible: (JSON.parse(body).blobs || []).length }
+        : { ok: false, deploymentEnv: process.env.VERCEL_ENV || 'unknown',
+            status: r.status, detail: body.slice(0, 300),
+            fix: r.status === 403
+              ? 'The token is present but rejected — it belongs to a different (probably deleted) Blob store. Disconnect and reconnect the store, then redeploy.'
+              : 'Blob API returned ' + r.status + '. Check the store still exists.' };
+    } catch (e) {
+      out.recordings = { ok: false, error: String(e.message || e) };
+    }
   }
 
   // ---- the actual diagnosis: run the app's own pull and inspect the join ----
