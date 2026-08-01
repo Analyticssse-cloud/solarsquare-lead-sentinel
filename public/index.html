@@ -298,7 +298,14 @@ function sampleData(role){
       const r=t[3][(ci+k)%t[3].length],n=seq++;
       const od=1+((k+ci)%6),sil=od+((k)%3);
       const row={audit_date:today,lrm_name:r,lrm_email:r.toLowerCase().replace(/ /g,'.')+'@solarsquare.in',
-        lead_id:'RMH'+n,customer_name:fn[n%fn.length]+' '+ln[(n*3)%ln.length],cluster:t[2],lead_stage:'',
+        lead_id:'RMH'+n,customer_name:fn[n%fn.length]+' '+ln[(n*3)%ln.length],cluster:t[2],
+        lead_stage:{mcch_past:'Meeting Confirmed - Customer Home',mcch_future:'Meeting Confirmed - Customer Home',
+          followup_missed:'Call Later',not_interested:'Lead - Not Interested',not_qualified:'Lead - Not Qualified'}[cat]||'',
+        lead_status:cat==='not_interested'||cat==='not_qualified'?'Closed - Lost':'Open',
+        // two rows carry a stale lead-table stage so the divergence badge is demoable;
+        // the stale value must differ from the true stage or the badge reads as nonsense
+        lead_table_stage:(n%9===0)?(cat==='followup_missed'?'Meeting Confirmed - Customer Home':'Call Later'):'',
+        stage_mismatch:(n%9===0),
         category:cat,created_at:iso(14+od),meeting_confirmed_at:null,meeting_schedule_date:null,meeting_done_date:null,
         follow_up_at:null,qualified_at:null,status_changed_at:null,attempt_today:false,days_overdue:od,
         priority_key:od*10+sil,lrm_category_rank:k+1,
@@ -436,6 +443,9 @@ function buildModel(queue,hier){
       urg:urg,days:row.days_overdue||0,tlEmail:tl,tlName:h.tl_name||'Unassigned',
       key:Number(row.priority_key)||0,rank:row.category_rank||99,slot:'primary',
       lrmEmail:row.lrm_email||'',
+      stage:row.lead_stage||'',status:row.lead_status||'',
+      stageMismatch:row.stage_mismatch===true||row.stage_mismatch==='TRUE'||row.stage_mismatch==='true',
+      crmStage:row.lead_table_stage||'',
       timeline:buildTL(row),systemNote:buildNote(row),
       lastAt:row.last_activity_at||null,lastType:row.last_activity_type||'',
       silent:Number(row.days_silent)||0,hoursSilent:Number(row.hours_silent)||0,
@@ -1043,6 +1053,7 @@ function auditPanel(){
       <span style="font-size:13px;color:${MUT(48)}">${esc(l.meta)}</span>
     </div>
     <div style="display:flex;align-items:center;gap:7px;font-size:13.5px;color:${MUT(55)};padding:6px 0 0">${ic('ph-user-circle',15,MUT(38))}LRM ${esc(l.LRM)}</div>
+    ${l.stage?`<div style="display:flex;align-items:center;gap:7px;font-size:13.5px;color:${MUT(55)};padding:5px 0 0;flex-wrap:wrap">${ic('ph-flow-arrow',15,MUT(38))}<span>Current stage <span style="color:var(--color-text);font-weight:600">${esc(l.stage)}</span>${l.status?`<span style="color:${MUT(40)}"> \u00b7 ${esc(l.status)}</span>`:''}</span>${l.stageMismatch&&l.crmStage?`<span class="ls-badge" style="background:var(--color-accent-2-100);color:var(--color-accent-2-800)">${ic('ph-warning-circle',12)}CRM record still reads “${esc(l.crmStage)}”</span>`:''}</div>`:''}
 
     <div style="padding:26px 0 22px;max-width:70ch">
       ${kicker('What breached')}
