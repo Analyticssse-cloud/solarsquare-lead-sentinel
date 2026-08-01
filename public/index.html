@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Lead Sentinel</title>
+<title>Lead Review</title>
 <link rel="stylesheet" href="styles.css">
 <link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/duotone/style.css">
 <style>
@@ -192,9 +192,23 @@ const S={screen:'queue',mtdLvl:'tl',actFilter:'open',actBusy:'',recs:{},recBusy:
   setTab:'access',mapping:null,unmapped:[],mapBusy:'',mapErr:'',mapMsg:'',mapQ:'',mapFilter:'overridden',mapSel:{},mapBulkTl:'',auditRaw:'',auditDate:'',tlEmail:null,catKey:'mcch_past',selId:null,audits:{},rcaReview:{},showRules:false,model:null,src:'live',role:'tl',user:null,meEmail:null,hier:[],rcaAuditors:null,newAuditor:'',dirQ:''};
 
 const AUTH={enabled:true,ready:false,clientId:'',domain:'solarsquare.in',admins:[]};
-const LOGO_SRC='https://cdn.solarsquare.in/blog/wp-content/uploads/2025/11/05101757/logo.webp';
+const LOGO_SRC='./solarsquare-logo.png';   // 1259×828, transparent — sharp up to ~900px wide
 function logoImg(h){return '<img src="'+LOGO_SRC+'" alt="SolarSquare" style="height:'+h+'px;width:auto;display:block" onerror="logoFallback(this,'+h+')">';}
 function logoFallback(el,h){const fs=Math.round(h*0.66);el.outerHTML='<span style="font-family:var(--font-heading);font-size:'+fs+'px;font-weight:600;letter-spacing:-.01em;color:var(--color-text)">Solar<span style="color:var(--color-accent)">Square</span></span>';}
+// A full-bleed brand moment while the queue loads. The logo is 1264px wide with a real
+// alpha channel, so it can own the screen without going soft. It is bounded by BOTH axes:
+// sized from width on tall windows, capped by height on short ones, so the caption below
+// it — the only thing saying the app is still working — never falls off the fold.
+function splash(msg){
+  return '<div style="position:fixed;inset:0;display:grid;place-items:center;padding:5vmin;background:var(--color-bg);overflow:hidden">'+
+    '<div style="display:flex;flex-direction:column;align-items:center;gap:min(4vmin,34px);width:100%;max-width:1000px">'+
+      '<img src="'+LOGO_SRC+'" alt="SolarSquare" style="width:min(70vw,860px);max-height:44vh;height:auto;object-fit:contain;display:block" onerror="logoFallback(this,120)">'+
+      '<div style="display:flex;flex-direction:column;align-items:center;gap:min(1.6vmin,12px)">'+
+        '<div style="font-family:var(--font-heading);font-size:clamp(22px,3.4vmin,42px);line-height:1;font-weight:700;letter-spacing:-.025em;text-align:center">Lead Review</div>'+
+        '<div style="font-size:clamp(10px,1.5vmin,13.5px);letter-spacing:.16em;text-transform:uppercase;color:'+MUT(42)+';text-align:center">'+esc(msg)+'</div>'+
+      '</div>'+
+    '</div></div>';
+}
 const ROLE_LABEL={tl:'Team Lead',zsm:'Zonal Manager',ados:'ADOS',admin:'Admin',auditor:'RCA auditor',blocked:'No access',none:'No team mapped'};
 function readSession(){try{return JSON.parse(localStorage.getItem('ls_auth')||'null');}catch(e){return null;}}
 function saveSession(o){try{localStorage.setItem('ls_auth',JSON.stringify(o));}catch(e){}}
@@ -232,11 +246,11 @@ function loginView(denied,reason){
       <div style="margin-bottom:36px">${logoImg(52)}</div>
       <div style="display:flex;align-items:center;gap:16px;margin-bottom:14px">
         <span style="width:52px;height:52px;flex:none;border-radius:999px;background:var(--color-accent);display:grid;place-items:center"><span style="width:21px;height:21px;border-radius:999px;border:5px solid var(--color-bg)"></span></span>
-        <span style="font-family:var(--font-heading);font-size:44px;line-height:1;letter-spacing:-.015em">Lead Sentinel</span>
+        <span style="font-family:var(--font-heading);font-size:44px;line-height:1;letter-spacing:-.015em">Lead Review</span>
       </div>
-      <div style="font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:${MUT(42)};margin-bottom:28px">Conversion Desk · Audit</div>
+      <div style="font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:${MUT(42)};margin-bottom:28px">Conversion Desk</div>
       <div style="width:56px;height:1px;background:${MUT(18)};margin-bottom:28px"></div>
-      <div style="font-size:15px;line-height:1.6;color:${MUT(62)};max-width:36ch;margin-bottom:32px">${denied?`<b>${em}</b> isn't authorised for Lead Sentinel.<br>Sign in with a mapped TL or manager account, or ask an admin for access.`:'Sign in with your SolarSquare account to open today’s audit queue.'}</div>
+      <div style="font-size:15px;line-height:1.6;color:${MUT(62)};max-width:36ch;margin-bottom:32px">${denied?`<b>${em}</b> isn’t authorised for Lead Review.<br>Sign in with a mapped TL or manager account, or ask an admin for access.`:'Sign in with your SolarSquare account to open today’s audit queue.'}</div>
       <div id="gbtn" style="min-height:48px;display:grid;place-items:center;width:100%"></div>
       <div id="autherr" style="font-size:12.5px;line-height:1.55;color:var(--color-accent-2-700);max-width:360px;margin-top:16px">${rmsg}</div>
       ${denied?`<button class="btn btn-secondary" onclick="signOut()" style="font-size:12.5px;margin-top:16px">Use a different account</button>`:''}
@@ -301,22 +315,33 @@ function sampleData(role){
   // A stakeholder demo has to show a day IN PROGRESS, not an untouched queue: some RCAs
   // submitted, some open, uneven across teams. A screen of zeros demos nothing.
   const rcaLog=[];
-  const REASONS=['LRM did not attempt the follow-up on the due date',
-                 'Customer confirmed but LRM never updated the stage',
-                 'Closed as not interested without capturing an objection',
-                 'Meeting slipped and no new date was set',
-                 'Lead re-dialled from the wrong number, never connected'];
-  const ACTS=['Coach the LRM','Reassign the lead','Escalate to ZSM','No action needed'];
+  // Root causes are drawn from the real RCA3 tree for the row's OWN category, so the demo
+  // can only show findings the shipped taxonomy can actually produce — and carries the
+  // what/why/owner/fault fields the reformed flow records.
+  const pickRoot=(cat,i)=>{
+    const t=RCA3[cat];if(!t)return null;
+    const w=t.w[i%t.w.length];
+    const y=w.y[i%w.y.length];
+    return{what:w.t,why:y.t,root:y.r[i%y.r.length]};
+  };
   queue.forEach((r,i)=>{
     const h=hierarchy.find(x=>x.lrm_email===r.lrm_email)||{};
     // team 1 is ~75% through the day, team 2 ~40% — makes the progress table readable
     const rate=h.tl_email===teams[0][0]?0.75:0.4;
     if(((i*7)%10)/10 >= rate)return;
+    const pk=pickRoot(r.category,i);if(!pk)return;
+    // spread across the shipped ACTIONS so the tracker shows real options, and vary
+    // owner/fault so both new fields and the coachable-vs-system colouring are visible
+    const act=ACTIONS[1+(i%(ACTIONS.length-1))];
     rcaLog.push({logged_at:iso(0),audit_date:today,lead_id:r.lead_id,category:r.category,
       lrm_email:r.lrm_email,lrm_name:r.lrm_name,tl_email:h.tl_email||'',tl_name:h.tl_name||'',
       auditor_email:h.tl_email||'',auditor_name:h.tl_name||'',
-      reason:REASONS[i%REASONS.length],severity:['low','med','high'][i%3],
-      action:ACTS[i%ACTS.length],note:'',why_path:'',assignee:''});
+      reason:pk.root,severity:'',
+      action:act,note:'',why_path:[pk.what,pk.why,pk.root].join(' \u2192 '),assignee:'',
+      what:pk.what,why:pk.why,
+      owner:OWNERS[i%OWNERS.length][0],
+      fault:(i%3===0)?'system':'coachable',
+      action_status:(i%4===0)?'done':'open'});
   });
   return{queue,hierarchy,rcaLog,role,
     // An admin is not a TL: leaving meEmail set tags a team row "· you" on a
@@ -358,12 +383,12 @@ async function load(){
   await initAuth();
   const sess=readSession();
   if(AUTH.enabled&&!sess){return loginView(false);}
-  document.getElementById('app').innerHTML='<div class="wrap" style="padding-top:80px;text-align:center;color:'+MUT(55)+';font-size:14px">Loading Lead Sentinel…</div>';
+  document.getElementById('app').innerHTML=splash('Loading Lead Review…');
   let data=null,fail={kind:'net'};
   // One retry: the first call after a deploy pays the cold start and can outrun the budget,
   // while the second lands on a warm function with the response already cached.
   for(let attempt=0;attempt<2&&!data;attempt++){
-    if(attempt)document.getElementById('app').innerHTML='<div class="wrap" style="padding-top:80px;text-align:center;color:'+MUT(55)+';font-size:14px">Still loading — the first request after a deploy is slow…</div>';
+    if(attempt)document.getElementById('app').innerHTML=splash('Still loading — the first request after a deploy is slow…');
     try{const r=await fetchT('/api/queue',attempt?90000:45000,authHeaders());
       if(r.status===401||r.status===403){let reason='';try{reason=(await r.json()).error||'';}catch(e){}return loginView(true,reason);}
       if(r.status===404){fail={kind:'no_server'};break;}
@@ -603,6 +628,10 @@ function mtdScope(){
   if(S.role==='admin'||S.role==='auditor')return null;
   return{role:S.role,me:me};
 }
+// Always tally PER TEAM LEAD and clamp there, then roll the clamped numbers up. Clamping
+// after aggregation lets one TL’s overflow hide inside an ADOS total, so the same data
+// reads differently at each level — the roll-up must be the sum of what each TL actually
+// cleared, never a re-clamp of a raw sum.
 function mtdBoard(level){
   const mon=mtdMonth(),L=tlLines(),sc=mtdScope();
   const inScope=function(te){
@@ -610,45 +639,55 @@ function mtdBoard(level){
     if(sc.role==='zsm')return l.zsm_email===sc.me;
     if(sc.role==='ados')return l.ados_email===sc.me;
     return true;};
-  const rows=(S.rcaLog||[]).filter(function(x){
-    return String(x.audit_date||'').slice(0,7)===mon&&inScope(norm(x.tl_email||''));});
-  const issuedDays=new Set((S.rcaLog||[]).filter(function(x){return String(x.audit_date||'').slice(0,7)===mon;})
-    .map(function(x){return String(x.audit_date||'').slice(0,10);})).size||1;
-  const g={};
-  const ent=function(key,name,cluster,tlSet){
-    if(!g[key])g[key]={key:key,name:name||'Unmapped',cluster:cluster||'',tlSet:tlSet||new Set(),
-      done:0,actions:0,closed:0,pairs:{},cats:{}};
-    return g[key];};
-  // seed every entity that EXISTS, not only those that logged something — a team that did
+  const monthRows=(S.rcaLog||[]).filter(function(x){return String(x.audit_date||'').slice(0,7)===mon;});
+  const issuedDays=new Set(monthRows.map(function(x){return String(x.audit_date||'').slice(0,10);})).size||1;
+  const capPerTl=DAILY_CAP*issuedDays;
+
+  // ---- 1. per-TL tally ----
+  const tl={};
+  const tlEnt=function(te){
+    if(!tl[te]){const l=L.line[te]||{};
+      tl[te]={key:te,name:l.tl||nameFromEmail(te)||'Unassigned',cluster:l.cluster||'',
+        ados_email:l.ados_email||'unmapped',ados:l.ados||'Unmapped',
+        zsm_email:l.zsm_email||'unmapped',zsm:l.zsm||'Unmapped',
+        raw:0,actions:0,closed:0,pairs:{}};}
+    return tl[te];};
+  // seed every TL that exists, not only those who logged something — a team that did
   // nothing all month is the row a manager most needs to see.
-  Object.keys(L.line).forEach(function(te){
-    if(!inScope(te))return;const l=L.line[te];
-    if(level==='tl')ent(te,l.tl,l.cluster,new Set([te]));
-    else if(level==='ados')ent(l.ados_email||'unmapped',l.ados,'',L.under.ados[l.ados_email]||new Set([te]));
-    else ent(l.zsm_email||'unmapped',l.zsm,'',L.under.zsm[l.zsm_email]||new Set([te]));
-  });
-  rows.forEach(function(x){
-    const te=norm(x.tl_email||''),l=L.line[te]||{};
-    const key=level==='tl'?(te||'unmapped'):level==='ados'?(l.ados_email||'unmapped'):(l.zsm_email||'unmapped');
-    const nm=level==='tl'?(x.tl_name||l.tl||nameFromEmail(te)):level==='ados'?l.ados:l.zsm;
-    const e=ent(key,nm,l.cluster,level==='tl'?new Set([te]):(L.under[level]&&L.under[level][key])||new Set([te]));
-    e.done++;
+  Object.keys(L.line).forEach(function(te){if(inScope(te))tlEnt(te);});
+  monthRows.forEach(function(x){
+    const te=norm(x.tl_email||'')||'unmapped';
+    if(!inScope(te))return;
+    const e=tlEnt(te);
+    if(x.tl_name&&(!L.line[te]||!L.line[te].tl))e.name=x.tl_name;
+    e.raw++;
     const act=String(x.action||'');
     if(act&&act!=='No action needed'){e.actions++;if(String(x.action_status||'')==='done')e.closed++;}
     const p=norm(x.lrm_email||'')+'|'+String(x.reason||'');e.pairs[p]=(e.pairs[p]||0)+1;
-    e.cats[x.category||'']=(e.cats[x.category||'']||0)+1;
   });
-  return Object.keys(g).map(function(k){
-    const e=g[k],n=Math.max(1,e.tlSet.size);
-    const expected=DAILY_CAP*issuedDays*n;
-    // a team cannot clear more than it was issued — clamp so this reads the same as Team progress
-    const done=Math.min(e.done,expected);
+  // clamp here, once: a TL cannot clear more than the queue issued them
+  Object.keys(tl).forEach(function(te){const e=tl[te];
+    e.done=Math.min(e.raw,capPerTl);
     let rep=0;Object.keys(e.pairs).forEach(function(p){if(e.pairs[p]>1)rep+=e.pairs[p];});
-    return{key:e.key,name:e.name,cluster:e.cluster,teams:n,done:done,expected:expected,days:issuedDays,
-      completion:expected?Math.min(100,Math.round(done/expected*100)):0,
-      actions:e.actions,closed:e.closed,
-      closure:e.actions?Math.round(e.closed/e.actions*100):null,
-      repeat:e.done?Math.round(rep/e.done*100):0};
+    e.rep=Math.min(rep,e.raw);});
+
+  // ---- 2. roll the clamped numbers up ----
+  const out={};
+  Object.keys(tl).forEach(function(te){
+    const e=tl[te];
+    const key=level==='tl'?te:level==='ados'?e.ados_email:e.zsm_email;
+    const nm =level==='tl'?e.name:level==='ados'?e.ados:e.zsm;
+    const g=out[key]=out[key]||{key:key,name:nm,cluster:level==='tl'?e.cluster:'',
+      teams:0,done:0,raw:0,actions:0,closed:0,rep:0};
+    g.teams++;g.done+=e.done;g.raw+=e.raw;g.actions+=e.actions;g.closed+=e.closed;g.rep+=e.rep;
+  });
+  return Object.keys(out).map(function(k){
+    const g=out[k],expected=capPerTl*Math.max(1,g.teams);
+    return{key:g.key,name:g.name,cluster:g.cluster,teams:g.teams,done:g.done,expected:expected,days:issuedDays,
+      completion:expected?Math.min(100,Math.round(g.done/expected*100)):0,
+      actions:g.actions,closed:g.closed,
+      closure:g.actions?Math.round(g.closed/g.actions*100):null,
+      repeat:g.raw?Math.min(100,Math.round(g.rep/g.raw*100)):0};
   }).sort(function(a,b){return b.completion-a.completion||b.done-a.done;});
 }
 function rootFreq(){
@@ -777,8 +816,8 @@ function nav(){
     return `<button data-act="nav" data-v="${id}" style="background:none;border:none;padding:0 0 6px;cursor:pointer;font-family:var(--font-body);font-size:14.5px;color:${on?'var(--color-text)':MUT(50)};border-bottom:2px solid ${on?'var(--color-text)':'transparent'};font-weight:${on?'600':'400'}">${lbl}</button>`;};
   return `<div class="wrap" style="display:flex;align-items:baseline;flex-wrap:wrap;column-gap:34px;row-gap:10px;padding-top:26px;padding-bottom:12px">
     <span style="display:flex;align-items:baseline;gap:12px;flex:none">
-      ${logoImg(19)}
-      <span style="font-family:var(--font-heading);font-size:19px;font-weight:700;letter-spacing:-.01em">Lead Sentinel</span>
+      ${logoImg(24)}
+      <span style="font-family:var(--font-heading);font-size:19px;font-weight:700;letter-spacing:-.01em">Lead Review</span>
     </span>
     <span style="display:flex;gap:26px;align-items:baseline">${screensFor().map(s=>tab(s[0],s[1])).join('')}</span>
     <span style="display:flex;align-items:baseline;flex-wrap:wrap;column-gap:22px;row-gap:6px;font-size:13px;color:${MUT(50)};min-width:0;margin-left:auto;justify-content:flex-end">
