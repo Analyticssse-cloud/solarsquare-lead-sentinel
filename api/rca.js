@@ -54,7 +54,7 @@ module.exports = async (req, res) => {
   if (!WRITE_SHEET_ID) {
     return res.status(501).json({
       error: 'no_write_sheet',
-      message: 'No log spreadsheet configured. Create a spreadsheet for Lead Sentinel, share it with '
+      message: 'No log spreadsheet configured. Create a spreadsheet for Lead Review, share it with '
              + (process.env.GOOGLE_SA_EMAIL || 'the service account') + ' as an Editor, and set RCA_SHEET_ID '
              + 'to its id. The shared LRM\u2192TL mapping sheet is deliberately never written to.',
     });
