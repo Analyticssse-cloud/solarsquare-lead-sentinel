@@ -154,6 +154,11 @@ async function getData(fresh) {
       customer_name:         r.customer_name || '',
       cluster:               r.cluster || '',
       lead_stage:            r.lead_stage || '',
+      // v6 emits the stage the CRM is showing today (newest audit row) alongside the
+      // lead-table stage; the pair is what makes a stale lead.stage visible to an auditor.
+      // Sheets delivers booleans as "TRUE"/"FALSE" text, hence the string coercion.
+      lead_table_stage:      r.lead_table_stage || '',
+      stage_mismatch:        r.stage_mismatch === true || String(r.stage_mismatch).toLowerCase() === 'true',
       category:              r.category || '',
       created_at:            r.created_at || null,
       meeting_confirmed_at:  r.meeting_confirmed_at || null,

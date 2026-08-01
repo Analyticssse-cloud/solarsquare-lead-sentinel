@@ -134,12 +134,12 @@ module.exports = async (req, res) => {
       verdict = excluded
         ? 'EVERY ROW WAS EXCLUDED — the card returned rows, but not one of their LRMs is in ' + MAP_TAB + ', so there is nobody to review them. Check that the mapping sheet\'s LRM Email column uses the same address form as the query (see sampleExcludedLrms).'
         : (out.reads[QUEUE_TAB] && out.reads[QUEUE_TAB].rowCount > 1
-          ? 'ROWS EXIST IN THE SHEET BUT NONE SURVIVED PARSING — every row is missing lead_id or category. Check that the Audit_Queue header row matches the v5 column names exactly.'
-          : 'NO ROWS AT SOURCE — the Metabase card and the ' + QUEUE_TAB + ' tab both came back empty. Run audit_queue_daily_v5.sql, or check METABASE_CARD.');
+          ? 'ROWS EXIST IN THE SHEET BUT NONE SURVIVED PARSING — every row is missing lead_id or category. Check that the Audit_Queue header row matches the v6 column names exactly (v6 adds lead_table_stage, lead_table_status, stage_mismatch and stage_changed_at_audit to the v5 set).'
+          : 'NO ROWS AT SOURCE — the Metabase card and the ' + QUEUE_TAB + ' tab both came back empty. Run audit_queue_daily_v6.sql, or check METABASE_CARD.');
     } else if (!H.length) {
       verdict = 'QUEUE HAS ROWS BUT THE MAPPING IS EMPTY — ' + MAP_TAB + ' read no usable rows, so no LRM has a TL and every scoped view is empty. Check the tab name and its header row.';
     } else if (pctBlank > 0.9) {
-      verdict = 'THE CARD IS NOT EMITTING lrm_email — ' + blankLrm + ' of ' + q.length + ' rows have a blank LRM address. Metabase card ' + (process.env.METABASE_CARD || '4447') + ' is running an OLD query: update it to audit_queue_daily_v5.sql.';
+      verdict = 'THE CARD IS NOT EMITTING lrm_email — ' + blankLrm + ' of ' + q.length + ' rows have a blank LRM address. Metabase card ' + (process.env.METABASE_CARD || '4447') + ' is running an OLD query: update it to audit_queue_daily_v6.sql.';
     } else if (!matched.length) {
       verdict = 'JOIN FAILURE — ' + q.length + ' queue rows and ' + H.length + ' mapping rows, but NOT ONE lrm_email matches. Compare sampleQueueLrmEmails with sampleMapLrmEmails.';
     } else {
