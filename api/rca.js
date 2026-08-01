@@ -22,6 +22,7 @@ const HEADER = [
   'lrm_email', 'lrm_name', 'tl_email', 'tl_name',
   'auditor_email', 'auditor_name',
   'reason', 'severity', 'action', 'note', 'why_path', 'assignee',
+  'what', 'why', 'owner', 'fault', 'action_status',
 ];
 
 const clean = v => String(v === undefined || v === null ? '' : v).replace(/[\r\n\t]+/g, ' ').slice(0, 900);
@@ -93,6 +94,7 @@ module.exports = async (req, res) => {
       clean(who.email || i.auditor_email), clean(who.name || i.auditor_name),
       clean(i.reason), clean(i.severity), clean(i.action), clean(i.note),
       clean(i.why_path), clean(i.assignee),
+      clean(i.what), clean(i.why), clean(i.owner), clean(i.fault), clean(i.action_status || 'open'),
     ]);
     const n = await appendRows(RCA_TAB, rows);
     return res.status(200).json({ ok: true, logged: n });
