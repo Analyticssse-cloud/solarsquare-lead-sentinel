@@ -112,10 +112,24 @@ excluded_stages AS (
 ),
 ist AS (
   SELECT (now() AT TIME ZONE 'Asia/Kolkata')::date                          AS today,
-         -- ★ v7.1: first of the current month, IST. The not_interested category is scoped
-         --   to the calendar month rather than a rolling window, so the month's NI closes
-         --   are all reviewable and the list resets on the 1st.
-         DATE_TRUNC('month', (now() AT TIME ZONE 'Asia/Kolkata')::date)::date AS month_start
+         DATE_TRUNC('month', (now() AT TIME ZONE 'Asia/Kolkata')::date)::date AS month_start,
+         -- ★ v7.3: the window NI / NQ closes are actually drawn from.
+         --
+         --   v7.1 used month_start directly and the two terminal categories went to ZERO
+         --   rows for the first two days of every month: a close must be `close_quiet_days`
+         --   (2) days silent before it is auditable, but on the 1st nothing in the month can
+         --   be more than a few hours old. The month gate and the quiet gate cancelled out.
+         --
+         --   So while the month is under 7 days old the window reaches back into the previous
+         --   month, which is what an MTD review does anyway — you are still closing out last
+         --   month's queue during the changeover. From the 7th it is the calendar month alone.
+         CASE
+           WHEN (now() AT TIME ZONE 'Asia/Kolkata')::date
+                - DATE_TRUNC('month', (now() AT TIME ZONE 'Asia/Kolkata')::date)::date < 7
+           THEN (DATE_TRUNC('month', (now() AT TIME ZONE 'Asia/Kolkata')::date)
+                 - interval '1 month')::date
+           ELSE DATE_TRUNC('month', (now() AT TIME ZONE 'Asia/Kolkata')::date)::date
+         END                                                                  AS close_from
 ),
 
 -- ---------------------------------------------------------------------------
@@ -282,7 +296,7 @@ enriched AS (
      ) AT TIME ZONE 'Asia/Kolkata')::date                    AS fu_ist,
     -- stage recency now reads the LATEST stage event, not the MAX of all of them
     (COALESCE(lt.latest_stage_at, t.last_stage_at) AT TIME ZONE 'Asia/Kolkata')::date AS stage_ist,
-    i.today, i.month_start, c.breach_window_days, c.close_quiet_days, c.loop_quiet_days, c.loop_turns_min
+    i.today, i.month_start, i.close_from, c.breach_window_days, c.close_quiet_days, c.loop_quiet_days, c.loop_turns_min
   FROM base b
   CROSS JOIN ist i
   CROSS JOIN cfg c
@@ -359,20 +373,20 @@ categorised AS (
   SELECT c.*,
     CASE
       -- ---- terminal stages: unconditional match, so these leads can take no other category ----
-      -- ★ v7.1: Not Interested is scoped to the CURRENT CALENDAR MONTH, not a rolling window.
-      --   Every lead marked NI since the 1st is reviewable; the quiet gate still applies so a
-      --   close made in the last few hours is not audited before the LRM has finished with it.
+      -- ★ v7.3: scoped to close_from (see the `ist` CTE) — the calendar month, widened to
+      --   take in the previous month while the current one is under a week old. The quiet
+      --   gate still holds a close back for 2 days so the LRM is finished with it first.
       WHEN is_ni THEN
-        CASE WHEN COALESCE(stage_ist, created_ist) >= month_start
+        CASE WHEN COALESCE(stage_ist, created_ist) >= close_from
                   AND quiet_days >= close_quiet_days
-             THEN 'not_interested' END          -- else NULL: closed in an earlier month
-      -- ★ v7.1: same calendar-month scope as not_interested. Covers both NQ strings in the
+             THEN 'not_interested' END          -- else NULL: closed before the window
+      -- ★ v7.3: same close_from window as not_interested. Covers both NQ strings in the
       --   data — 'Lead - Not Qualified' and 'Meeting - Not Qualified' — via the ILIKE on
       --   '%not qualified%' that sets is_nq.
       WHEN is_nq THEN
-        CASE WHEN COALESCE(stage_ist, created_ist) >= month_start
+        CASE WHEN COALESCE(stage_ist, created_ist) >= close_from
                   AND quiet_days >= close_quiet_days
-             THEN 'not_qualified' END          -- else NULL: closed in an earlier month
+             THEN 'not_qualified' END          -- else NULL: closed before the window
 
       -- ---- ★ v7 STAGE-DRIVEN RULES: these run BEFORE the date-driven branches ----
       -- mcch_future fires on a future meeting date alone and never looks at the stage, so

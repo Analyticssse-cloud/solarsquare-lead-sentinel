@@ -311,18 +311,70 @@ Optional env: `MAPPING_TAB` (default `Mapping_Overrides`), `ACCESS_TAB` (default
 After a save the app re-pulls `/api/queue?fresh=1`, which bypasses the 5-minute warm cache,
 so the change is visible immediately rather than at the next cache expiry.
 
-## Apps Script v2 — what to do after pasting it
+## Call recordings — Vercel Blob
 
-`apps-script/AuditQueueDaily.gs` was rewritten for speed (roughly 3-5 min → 25-45 s on
-~10,600 rows). Two setup steps matter:
+Recordings a TL attaches during an RCA go to Vercel Blob under
+`recordings/<lead_id>/<timestamp>-<filename>`, and the URL is written into `RCA_Log`
+(`recording_url`, `recording_name`) so a Quality auditor can play the call from the RCA
+audit card.
+
+**Without `BLOB_READ_WRITE_TOKEN` the recording never leaves the TL's browser.** It is
+saved to that device's IndexedDB so the TL can still play it back, `/api/recording`
+returns 501, and no auditor — or anyone on another device — can ever hear it. This is the
+single most important variable to set if Quality is meant to review calls.
+
+Setup, once:
+
+1. **vercel.com → your project → Storage → Create Database → Blob.** Name it something
+   like `lead-review-recordings`, region Singapore (`sin1`) — closest to India.
+2. **Connect it to the project.** Vercel adds `BLOB_READ_WRITE_TOKEN` to the project's
+   environment variables automatically, for all three environments. Confirm it under
+   **Settings → Environment Variables**; if only Production got it, tick Preview and
+   Development too.
+3. **Redeploy.** Environment variables are baked in at build time — an existing deployment
+   will not pick the token up. Deployments → ⋯ → Redeploy.
+4. **Verify:** attach a recording in the app, then open
+   `https://<app>.vercel.app/api/recording?lead=<any_lead_id>` — it should return
+   `{ "files": [ { "url": … } ] }`. A 501 means the token is still missing from that
+   environment.
+
+Notes:
+
+- Blobs are **public-read by URL** (unguessable, random path). Treat the URL as the
+  credential; do not paste recording links outside the tool.
+- The cap is 60 MB per file, which is well past a 60-minute mono call.
+- Free tier gives 1 GB. A 30-minute call at 64 kbps is ~14 MB, so budget roughly 70 calls
+  per GB and move to a paid plan before Quality scales up.
+- Recordings captured before the token was set are stranded on the TL's device. They
+  re-upload only if that TL re-attaches the file.
+
+---
+
+## Apps Script v3 — what to do after pasting it
+
+`apps-script/AuditQueueDaily.gs` was rewritten again: v2's `LOG_INDEX` row-range memory is
+gone, the log is append-only, and every run is validated against the query's expected
+column list. Setup:
 
 1. **Services → add “Google Sheets API”** (identifier `Sheets`). Writes then go through the
    REST API in 5,000-row batches instead of `SpreadsheetApp`. Without it the script still
-   works, logs a warning, and runs on the slow path.
-2. **Run `reindexLog()` once** after the upgrade. v2 remembers where today's rows sit in
-   `Audit_Queue_Log` (Script Property `LOG_INDEX`) so a refresh can replace them with one
-   `deleteRows` call instead of reading the whole log. Re-run it any time the log is edited
-   by hand.
+   works, flags it in `Run_Log`, and runs on the slow path.
+2. **Run `checkSetup()`.** Validates the four script properties, the time zone, the Sheets
+   service and the Metabase pull — and diffs the returned columns against `EXPECTED_COLS`
+   — without writing a row. Read the result in the editor's Execution log.
+3. **Run `installDailyTrigger()`.** Installs the 3 PM IST trigger and runs the export once.
 
-`benchmark()` times the Metabase pull and the row shaping and writes the breakdown to
-`Run_Log` without touching the data — use it to see where a slow run is actually going.
+`reindexLog()`, `deleteToday()` and `benchmark()` no longer exist — v3 does not track row
+ranges, so nothing needs reindexing, and `Run_Log` now carries the phase timings
+(`fetch_s`, `queue_s`, `log_s`, `total_s`) on every run.
+
+Watch the `verdict` column in `Run_Log`:
+
+| verdict | meaning |
+| --- | --- |
+| `ok` | normal run |
+| `EMPTY` | Metabase returned 0 rows; `Audit_Queue` was left untouched so the app keeps the previous day |
+| `THIN` | under 40% of the previous run — usually a stage string in the SQL no longer matching the data |
+| `COLS` | the query stopped returning an expected column; it was written blank |
+| `FAILED` | the run threw; the message is in `notes` |
+
