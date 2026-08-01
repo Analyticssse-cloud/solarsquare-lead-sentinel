@@ -5,21 +5,62 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Lead Sentinel</title>
 <link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/duotone/style.css">
 <style>
   body{margin:0;background:var(--color-bg);color:var(--color-text);font-family:var(--font-body)}
   a{color:var(--color-accent)}
-  .wrap{max-width:1200px;margin:0 auto;padding:0 26px}
+  a:hover{color:var(--color-accent-700)}
+  .wrap{max-width:1280px;margin:0 auto;padding:0 30px}
   .ls-scroll::-webkit-scrollbar{height:8px}
   .ls-scroll::-webkit-scrollbar-thumb{background:color-mix(in srgb,var(--color-text) 18%,transparent);border-radius:999px}
   select.input{appearance:none;-webkit-appearance:none;cursor:pointer}
   button{font-family:var(--font-body)}
   @keyframes lsfade{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+  /* depth + state: the page stays paper, but a row you can act on lifts under the cursor */
+  .ls-row{transition:background .13s ease,box-shadow .13s ease,padding-left .13s ease}
+  .ls-row:hover{background:color-mix(in srgb,var(--color-text) 3.5%,transparent)}
+  .ls-row[data-on="1"]{background:var(--color-bg);box-shadow:var(--shadow-sm)}
+  .ls-cat{transition:background .13s ease}
+  .ls-cat:hover{background:color-mix(in srgb,var(--color-text) 4%,transparent)}
+  .ls-badge{display:inline-flex;align-items:center;gap:6px;font-size:10.5px;letter-spacing:.07em;
+            text-transform:uppercase;font-weight:600;padding:3px 9px;border-radius:2px;white-space:nowrap;line-height:1.5}
+  .ls-bar{display:block;height:3px;width:100%;background:color-mix(in srgb,var(--color-text) 11%,transparent);
+          border-radius:999px;overflow:hidden}
+  .ls-bar>i{display:block;height:100%;border-radius:999px;transition:width .45s cubic-bezier(.2,.7,.3,1)}
+  .ls-lift{transition:box-shadow .15s ease,transform .15s ease}
+  .ls-lift:hover{box-shadow:var(--shadow-md)}
+  .ls-btn{cursor:pointer;font-family:inherit;border-radius:2px;transition:background .13s ease,color .13s ease,border-color .13s ease}
+  .ls-btn-solid{border:1px solid var(--color-text);background:var(--color-text);color:var(--color-bg)}
+  .ls-btn-solid:hover{background:var(--color-accent);border-color:var(--color-accent)}
+  .ls-btn-ghost{border:1px solid color-mix(in srgb,var(--color-text) 22%,transparent);background:none;color:var(--color-text)}
+  .ls-btn-ghost:hover{border-color:var(--color-accent);color:var(--color-accent-700)}
+  button:focus-visible,select:focus-visible,input:focus-visible,textarea:focus-visible,a:focus-visible{
+    outline:2px solid var(--color-accent);outline-offset:2px}
+  i[class^="ph-"],i[class*=" ph-"]{line-height:1;flex:none}
+  .ls-3col{display:grid;grid-template-columns:216px 278px minmax(0,1fr);gap:40px;align-items:start;padding-top:14px}
+  .ls-rail{position:sticky;top:18px}
+  @media (max-width:1180px){.ls-3col{grid-template-columns:198px 244px minmax(0,1fr);gap:24px}}
+  @media (max-width:960px){.ls-3col{grid-template-columns:1fr;gap:26px}.ls-rail{position:static}}
+  .ls-rules{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:34px;padding:6px 0 34px;max-width:1100px}
+  @media (max-width:900px){.ls-rules{grid-template-columns:repeat(2,minmax(0,1fr))}}
+  .ls-trunc{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
 </style>
 </head>
 <body>
 <div id="app" style="min-height:100vh;background:radial-gradient(130% 90% at 92% -20%, var(--color-accent-100) 0%, var(--color-bg) 55%)"></div>
 
 <script>
+// Five categories, two accents. Each badge uses ONE ramp — magenta for a leak that has
+// already cost a meeting, cyan for a leak still recoverable, neutral for watch-only.
+const CATC={
+ mcch_past:      {tone:'var(--color-accent-2)',    tint:'var(--color-accent-2-100)',ink:'var(--color-accent-2-800)',icon:'ph-calendar-x'},
+ followup_missed:{tone:'var(--color-accent-2-400)',tint:'var(--color-accent-2-100)',ink:'var(--color-accent-2-700)',icon:'ph-phone-x'},
+ not_interested: {tone:'var(--color-accent-700)',  tint:'var(--color-accent-100)',  ink:'var(--color-accent-800)',  icon:'ph-hand-palm'},
+ not_qualified:  {tone:'var(--color-accent)',      tint:'var(--color-accent-100)',  ink:'var(--color-accent-800)',  icon:'ph-funnel-x'},
+ mcch_future:    {tone:'color-mix(in srgb,var(--color-text) 45%,transparent)',
+                  tint:'color-mix(in srgb,var(--color-text) 7%,transparent)',
+                  ink:'color-mix(in srgb,var(--color-text) 78%,transparent)',icon:'ph-calendar-check'},
+};
 const CATS=[
  {key:'mcch_past',name:'Meeting confirmed · date passed',short:'MCCH past',dot:'#1668b3',
   check:'The confirmed meeting (MCCH) date is before today, but the lead is still at MCCH — the meeting was never moved to MD and no fresh date was set. A stuck MCCH is a silent MD leak.',
@@ -140,13 +181,14 @@ const ACTLBL={call:'Call logged',stage_change:'Stage changed',meeting_done:'Meet
 const LEAKLBL={L1:'Meeting date passed, nothing since',L2:'Marked CNC, never re-dialled',L3:'Call-later loop turning, no close',L4:'Closed with no connected call',L4b:'Closed \u2014 check the reason',L0:'Watch only'};const silentLbl=l=>{if(l.lastAt==null)return'never touched';const h=l.hoursSilent||0;if(h<24)return h<=1?'active this hour':h+'h silent';return (l.silent||Math.round(h/24))+'d silent';};
 const catObj=k=>CATS.find(c=>c.key===k);
 
-const S={screen:'queue',recs:{},recBusy:null,rcaLog:[],rcaPending:0,rcaErr:'',diag:null,diagState:'',auditRaw:'',auditDate:'',tlEmail:null,catKey:'mcch_past',selId:null,audits:{},rcaReview:{},showRules:false,model:null,src:'live',role:'tl',user:null,meEmail:null,hier:[],rcaAuditors:null,newAuditor:'',dirQ:''};
+const S={screen:'queue',recs:{},recBusy:null,rcaLog:[],rcaPending:0,rcaErr:'',diag:null,diagState:'',access:null,accessBusy:'',accessErr:'',accessFilter:'all',newAccessEmail:'',newAccessRole:'auditor',
+  setTab:'access',mapping:null,unmapped:[],mapBusy:'',mapErr:'',mapMsg:'',mapQ:'',mapFilter:'overridden',mapSel:{},mapBulkTl:'',auditRaw:'',auditDate:'',tlEmail:null,catKey:'mcch_past',selId:null,audits:{},rcaReview:{},showRules:false,model:null,src:'live',role:'tl',user:null,meEmail:null,hier:[],rcaAuditors:null,newAuditor:'',dirQ:''};
 
 const AUTH={enabled:true,ready:false,clientId:'',domain:'solarsquare.in',admins:[]};
 const LOGO_SRC='https://cdn.solarsquare.in/blog/wp-content/uploads/2025/11/05101757/logo.webp';
 function logoImg(h){return '<img src="'+LOGO_SRC+'" alt="SolarSquare" style="height:'+h+'px;width:auto;display:block" onerror="logoFallback(this,'+h+')">';}
 function logoFallback(el,h){const fs=Math.round(h*0.66);el.outerHTML='<span style="font-family:var(--font-heading);font-size:'+fs+'px;font-weight:600;letter-spacing:-.01em;color:var(--color-text)">Solar<span style="color:var(--color-accent)">Square</span></span>';}
-const ROLE_LABEL={tl:'Team Lead',zsm:'Zonal Manager',ados:'ADOS',admin:'Admin',none:'No team mapped'};
+const ROLE_LABEL={tl:'Team Lead',zsm:'Zonal Manager',ados:'ADOS',admin:'Admin',auditor:'RCA auditor',blocked:'No access',none:'No team mapped'};
 function readSession(){try{return JSON.parse(localStorage.getItem('ls_auth')||'null');}catch(e){return null;}}
 function saveSession(o){try{localStorage.setItem('ls_auth',JSON.stringify(o));}catch(e){}}
 function signOut(){try{if(window.google&&google.accounts&&google.accounts.id)google.accounts.id.disableAutoSelect();}catch(e){}localStorage.removeItem('ls_auth');location.reload();}
@@ -282,6 +324,10 @@ const SAMPLE_ROLE=/[?&]sample=admin/.test(location.search)?'admin':'tl';
 function applySample(role){
   const data=sampleData(role);
   S.src='sample';S.role=data.role;S.user=data.user;S.meEmail=data.meEmail;
+  S.mapping={};S.mapSel={};S.mapBulkTl='';
+  S.unmapped=[{lrm_email:'nikhil.bansal@solarsquare.in',lrm_name:'Nikhil Bansal',cluster:'Pune',leads:9},
+              {lrm_email:'ayesha.khan@solarsquare.in',lrm_name:'Ayesha Khan',cluster:'Indore',leads:6},
+              {lrm_email:'rahul.dere@solarsquare.in',lrm_name:'Rahul Dere',cluster:'Pune',leads:4}];
   S.auditRaw=data.queue[0].audit_date;S.auditDate=fmtLongDate(data.queue[0].audit_date);
   S.rcaLog=data.rcaLog||[];S.audits={};
   S.rcaLog.forEach(x=>{S.audits[x.lead_id]={reason:x.reason,sev:x.severity,note:x.note||'',
@@ -333,10 +379,14 @@ async function load(){
   S.auditDate=fmtLongDate((data.queue&&data.queue[0]&&data.queue[0].audit_date)||'');
   S.user=data.user||sess||null;
   S.meEmail=data.meEmail||null;
+  S.unmapped=data.unmappedLrms||[];
+  S.mapping=data.mappingOverrides||null;
   buildModel(data.queue||[],data.hierarchy||[]);
   if(S.role==='zsm'||S.role==='ados'||S.role==='admin')S.screen='mgr';
   render();
   loadRcaLog();
+  loadAccess();
+  if(S.role==='admin')loadMapping();
   flushRca();
   if(!(data.queue||[]).length)loadDiag();
 }
@@ -426,6 +476,25 @@ function myTlName(){const t=TLS().find(x=>x.me)||TLS().find(x=>x.email===S.tlEma
 function cutoffLeft(){const now=new Date();const cut=new Date(now);cut.setHours(19,0,0,0);if(now>=cut)cut.setDate(cut.getDate()+1);let s=Math.max(0,Math.floor((cut-now)/1000));const p=n=>String(n).padStart(2,'0');return p(Math.floor(s/3600))+':'+p(Math.floor(s%3600/60))+':'+p(s%60);}
 function tickTimers(){const t=cutoffLeft();document.querySelectorAll('[data-timer]').forEach(el=>{el.textContent=t;});}
 const MUT=p=>'color-mix(in srgb,var(--color-text) '+p+'%,transparent)';
+// ---- visual vocabulary -----------------------------------------------------
+const ACTICON={call:'ph-phone-call',stage_change:'ph-arrows-left-right',meeting_done:'ph-check-circle',
+  followup_set:'ph-calendar-plus',crm_touch:'ph-pencil-simple-line',none:'ph-prohibit'};
+const LEAKICON={L1:'ph-calendar-x',L2:'ph-phone-slash',L3:'ph-arrows-clockwise',L4:'ph-x-circle',
+  L4b:'ph-question',L0:'ph-eye'};
+const cstyle=k=>CATC[k]||CATC.mcch_future;
+const ic=(name,size,col)=>'<i class="ph-duotone '+name+'" style="font-size:'+(size||15)+'px'+(col?';color:'+col:'')+'"></i>';
+function catBadge(k){const c=cstyle(k),o=catObj(k);
+  return '<span class="ls-badge" style="background:'+c.tint+';color:'+c.ink+'">'+ic(c.icon,13)+esc(o?(o.short||o.name):k)+'</span>';}
+function bar(pct,tone){const p=Math.max(0,Math.min(100,Math.round(pct||0)));
+  return '<span class="ls-bar"><i style="width:'+p+'%;background:'+(tone||'var(--color-text)')+'"></i></span>';}
+// How loud a silence should read. 5+ days is a magenta problem, 3-4 cyan, under that quiet.
+function silenceTone(l){const d=l.lastAt==null?99:(l.silent||0);
+  return d>=5?{t:'var(--color-accent-2)',bg:'var(--color-accent-2-100)',ink:'var(--color-accent-2-800)'}
+       : d>=3?{t:'var(--color-accent)',bg:'var(--color-accent-100)',ink:'var(--color-accent-800)'}
+       : {t:MUT(35),bg:MUT(6),ink:MUT(62)};}
+function chip(txt,tone,icon){return '<span class="ls-badge" style="background:'+tone.bg+';color:'+tone.ink+'">'+
+  (icon?ic(icon,12):'')+esc(txt)+'</span>';}
+const kicker=(t,pb)=>'<div style="font-size:10.5px;letter-spacing:.11em;text-transform:uppercase;color:'+MUT(42)+';padding-bottom:'+(pb==null?8:pb)+'px">'+t+'</div>';
 // ---- RCA log: the shared write store ----
 // Completed RCAs are appended to the RCA_Log tab via /api/rca, so every manager sees the
 // same numbers. Submissions go through an outbox in localStorage: an auditor on a flaky
@@ -491,7 +560,7 @@ function mtdStats(){
 // The queue is work TLs do. Everyone above them (ZSM, ADOS, RCA auditors, admin) sees what
 // the teams did with it, never a queue of their own.
 const isTL=()=>S.role==='tl';
-function isAud(){ensureAuditors();const me=norm((S.user&&S.user.email)||S.meEmail||'');return S.role==='admin'||(!!me&&S.rcaAuditors.map(norm).includes(me));}
+function isAud(){const me=norm((S.user&&S.user.email)||S.meEmail||'');if(S.role==='admin'||S.role==='auditor')return true;const ov=(S.access||{})[me];return !!(ov&&ov.role==='auditor');}
 // When the queue comes back empty, the app should say WHY rather than assume a quiet day.
 // /api/debug runs the same pull and reports where the rows were lost.
 async function loadDiag(){
@@ -549,8 +618,7 @@ function screensFor(){
   out.push(['mgr','Team progress']);
   if(S.role==='admin')out.push(['settings','Settings']);
   return out;
-}
-function render(){
+}function render(){
   const el=document.getElementById('app');
   const allow=screensFor().map(s=>s[0]);
   const scr=allow.includes(S.screen)?S.screen:allow[0];
@@ -596,15 +664,21 @@ const done0=l=>rcaDone(l.id);
 
 // ---- latest activity ----
 function activityBlock(l){
-  const t=ACTLBL[l.lastType]||'Activity';
-  const stale=(l.silent||0)>=3;
-  const cell=(k,v,sub,em)=>`<div style="min-width:0"><div style="font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:${MUT(40)};margin-bottom:5px">${k}</div><div style="font-size:15px;line-height:1.3;${em?'font-weight:600':''}">${v}</div>${sub?`<div style="font-size:12px;color:${MUT(48)};margin-top:3px">${sub}</div>`:''}</div>`;
-  return `<div style="display:grid;grid-template-columns:1.4fr 1fr 1fr;gap:34px;padding:18px 0;border-top:1px solid var(--color-text);border-bottom:1px solid var(--color-divider)">
-    ${cell('Latest activity',esc(t),esc(fmtDT(l.lastAt)))}
-    ${cell('Silence',esc(silentLbl(l)),l.lastAt?'since last signal':'no signal on record',stale)}
-    ${cell('Dials · 30d',(l.calls30||0)+' <span style="color:'+MUT(35)+'">/</span> '+(l.connects30||0),(l.connects30||0)===0?'no connect ≥15s':'connected')}
-    ${l.loops>=3?`<div style="grid-column:1/-1;font-size:13px;color:${MUT(55)};padding-top:4px">Call-later loop has turned ${l.loops} times without a confirmed meeting.</div>`:''}
-    ${LEAKLBL[l.leak]?`<div style="grid-column:1/-1;font-size:13px;color:${MUT(55)};padding-top:4px">${esc(LEAKLBL[l.leak])}</div>`:''}
+  const t=ACTLBL[l.lastType]||'Activity',st=silenceTone(l);
+  const noConnect=(l.connects30||0)===0;
+  const cell=(icon,col,k,v,sub)=>`<div style="min-width:0;display:flex;gap:11px;align-items:flex-start">
+    ${ic(icon,19,col||MUT(38))}
+    <div style="min-width:0">
+      <div style="font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:${MUT(42)};margin-bottom:4px">${k}</div>
+      <div style="font-size:15px;line-height:1.3">${v}</div>
+      ${sub?`<div style="font-size:12px;color:${MUT(48)};margin-top:3px">${sub}</div>`:''}
+    </div></div>`;
+  return `<div style="display:grid;grid-template-columns:1.35fr 1fr 1fr;gap:30px;padding:20px 0;border-top:1px solid var(--color-text);border-bottom:1px solid var(--color-divider)">
+    ${cell(ACTICON[l.lastType]||'ph-clock-counter-clockwise',MUT(48),'Latest activity',esc(t),esc(fmtDT(l.lastAt)))}
+    ${cell('ph-wave-sine',st.t,'Silence','<span style="font-weight:600;color:'+st.ink+'">'+esc(silentLbl(l))+'</span>',l.lastAt?'since last signal':'no signal on record')}
+    ${cell(noConnect?'ph-phone-slash':'ph-phone-call',noConnect?'var(--color-accent-2)':MUT(48),'Dials · 30d',(l.calls30||0)+' <span style="color:'+MUT(32)+'">/</span> '+(l.connects30||0),noConnect?'no connect ≥15s':'connected')}
+    ${l.loops>=3?`<div style="grid-column:1/-1;display:flex;align-items:center;gap:8px;font-size:13px;color:${MUT(58)};padding-top:6px">${ic('ph-arrows-clockwise',15,'var(--color-accent)')}Call-later loop has turned ${l.loops} times without a confirmed meeting.</div>`:''}
+    ${LEAKLBL[l.leak]?`<div style="grid-column:1/-1;display:flex;align-items:center;gap:8px;font-size:13px;color:${MUT(58)};padding-top:6px">${ic(LEAKICON[l.leak]||'ph-warning',15,'var(--color-accent-2)')}${esc(LEAKLBL[l.leak])} <span style="color:${MUT(38)}">· ${esc(l.leak)}</span></div>`:''}
   </div>`;
 }
 
@@ -650,45 +724,87 @@ function recordingBlock(l){
   </div>`;
 }
 
+// The hero answers the only question a TL opens this on: how much is left, and what is
+// worst. One big figure, one progress rule, three counts — no cards, no chrome.
+function heroQueue(){
+  const total=L().length,done=audited(),open=total-done;
+  const pct=total?Math.round(done/total*100):0;
+  const urgent=L().filter(l=>!rcaDone(l.id)&&(l.silent||0)>=5).length;
+  const hi=L().filter(l=>{const x=S.audits[l.id];return x&&x.submitted&&x.sev==='high';}).length;
+  const stat=(v,lbl,tone)=>`<div style="min-width:78px">
+    <div style="font-family:var(--font-heading);font-size:30px;line-height:1;font-weight:700;color:${tone||'var(--color-text)'}">${v}</div>
+    <div style="font-size:12px;color:${MUT(52)};padding-top:6px;letter-spacing:.01em">${lbl}</div></div>`;
+  const msg=!total?'Nothing to review':done===total?'Queue clear — every lead has an RCA'
+    :done===0?'Nothing logged yet today':open+' still to log before 7 PM';
+  return `<div style="padding:38px 0 26px">
+    <div style="display:flex;align-items:flex-end;gap:48px;flex-wrap:wrap">
+      <div style="flex:1;min-width:300px">
+        ${kicker(esc(S.auditDate||'Today')+' &middot; Breach review',10)}
+        <div style="display:flex;align-items:baseline;gap:14px;flex-wrap:wrap">
+          <h2 style="margin:0;font-family:var(--font-heading);font-size:54px;line-height:.98;font-weight:700;letter-spacing:-.02em;font-variant-numeric:tabular-nums">${done}<span style="color:${MUT(28)}"> / ${total}</span></h2>
+          <span style="font-size:17px;line-height:1.3;color:${MUT(62)};padding-bottom:5px">${esc(msg)}</span>
+        </div>
+      </div>
+      <div style="display:flex;gap:44px;flex-wrap:wrap;padding-bottom:4px">
+        ${stat(open,'Open',open?'var(--color-text)':MUT(32))}
+        ${stat(urgent,'Silent 5 days +',urgent?'var(--color-accent-2)':MUT(32))}
+        ${stat(hi,'High severity',hi?'var(--color-accent-700)':MUT(32))}
+      </div>
+    </div>
+    <div style="padding-top:22px;display:flex;align-items:center;gap:16px">
+      <span style="flex:1">${bar(pct,pct===100?'var(--color-accent)':'var(--color-text)')}</span>
+      <span style="font-size:12.5px;font-variant-numeric:tabular-nums;color:${MUT(50)};min-width:4ch;text-align:right">${pct}%</span>
+      <button data-act="rules" class="ls-btn" style="background:none;border:none;padding:0;font-size:12.5px;color:${MUT(52)};text-decoration:underline">${S.showRules?'Hide':'How leads are flagged'}</button>
+    </div>
+  </div>`;
+}
+
 function queueView(){
   const total=L().length,done=audited();
   if(!total)return `<div class="wrap" style="padding-top:96px;animation:lsfade .25s ease">
-    <h2 style="margin:0 0 12px;font-size:34px;font-weight:700">Nothing flagged today</h2>
+    <div style="display:flex;align-items:center;gap:14px;padding-bottom:14px">${ic('ph-confetti',30,'var(--color-accent)')}
+      <h2 style="margin:0;font-size:34px;font-weight:700">Nothing flagged today</h2></div>
     <div style="font-size:15.5px;line-height:1.6;color:${MUT(60)};max-width:56ch;text-wrap:pretty">No lead under your team has gone silent past its threshold — or today’s export hasn’t reached the sheet yet. The check below says which.</div>
     ${diagBlock()}</div>`;
 
   const rail=CATS.map(c=>{const dl=catLeads(c.key),d=dl.filter(l=>rcaDone(l.id)).length,on=c.key===S.catKey;
-    return `<button data-act="cat" data-v="${c.key}" style="display:block;width:100%;text-align:left;background:none;border:none;padding:9px 0;cursor:pointer;font-family:inherit">
-      <span style="display:flex;align-items:baseline;gap:8px">
-        <span style="font-size:14px;line-height:1.35;color:${on?'var(--color-text)':MUT(58)};font-weight:${on?'600':'400'}">${esc(c.short||c.name)}</span>
+    const cs=cstyle(c.key),pct=dl.length?d/dl.length*100:0,clear=dl.length&&d===dl.length;
+    return `<button class="ls-cat" data-act="cat" data-v="${c.key}" style="display:block;width:100%;text-align:left;background:${on?MUT(5):'none'};border:none;border-left:3px solid ${on?cs.tone:'transparent'};padding:11px 12px;cursor:pointer;font-family:inherit">
+      <span style="display:flex;align-items:center;gap:9px">
+        ${ic(cs.icon,16,on?cs.tone:MUT(45))}
+        <span class="ls-trunc" style="font-size:13.5px;line-height:1.3;color:${on?'var(--color-text)':MUT(62)};font-weight:${on?'600':'400'}">${esc(c.short||c.name)}</span>
         <span style="flex:1"></span>
-        <span style="font-size:12.5px;font-variant-numeric:tabular-nums;color:${dl.length&&d===dl.length?MUT(32):MUT(55)}">${d}/${dl.length}</span>
+        <span style="font-size:12.5px;font-variant-numeric:tabular-nums;color:${clear?MUT(32):MUT(58)}">${clear?'✓':d+'/'+dl.length}</span>
+      </span>
+      <span style="display:block;padding:8px 0 0 25px">${bar(pct,cs.tone)}</span>
+    </button>`;}).join('');
+
+  const dl=catLeads(S.catKey),cs=cstyle(S.catKey);
+  const rows=dl.map(l=>{const on=l.id===S.selId,dn=rcaDone(l.id),st=silenceTone(l);
+    return `<button class="ls-row" data-on="${on?1:0}" data-act="lead" data-v="${l.id}" style="display:block;width:100%;text-align:left;background:none;border:none;border-bottom:1px solid var(--color-divider);border-left:2px solid ${on?cs.tone:'transparent'};padding:12px 14px;cursor:pointer;font-family:inherit">
+      <span style="display:flex;align-items:center;gap:9px">
+        <span style="font-size:14px;font-weight:${on?'600':'500'};color:${dn?MUT(42):'var(--color-text)'};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0">${esc(l.name)}</span>
+        <span style="flex:1"></span>
+        ${dn?ic('ph-check-circle',16,'var(--color-accent)'):''}
+      </span>
+      <span style="display:flex;align-items:center;gap:8px;margin-top:6px">
+        <span style="font-size:12px;color:${MUT(48)};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0">${esc(l.LRM)}</span>
+        <span style="flex:1"></span>
+        <span class="ls-badge" style="background:${st.bg};color:${st.ink}">${esc(silentLbl(l))}</span>
       </span>
     </button>`;}).join('');
 
-  const dl=catLeads(S.catKey);
-  const rows=dl.map(l=>{const on=l.id===S.selId,dn=rcaDone(l.id);
-    return `<button data-act="lead" data-v="${l.id}" style="display:block;width:100%;text-align:left;background:none;border:none;border-bottom:1px solid var(--color-divider);padding:11px 14px 11px ${on?'12px':'14px'};cursor:pointer;font-family:inherit;${on?'border-left:2px solid var(--color-text)':''}">
-      <span style="display:block;font-size:14px;font-weight:${on?'600':'500'};color:${dn?MUT(45):'var(--color-text)'};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(l.name)}${dn?' <span style="font-weight:400">· done</span>':''}</span>
-      <span style="display:block;font-size:12px;color:${MUT(48)};margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(l.LRM)} · ${esc(silentLbl(l))}</span>
-    </button>`;}).join('');
-
   return `<div class="wrap" style="padding-bottom:80px;animation:lsfade .25s ease">
-    <div style="display:flex;align-items:baseline;gap:20px;padding:32px 0 30px">
-      <h2 style="margin:0;font-size:34px;font-weight:700;letter-spacing:-.015em">Breach review</h2>
-      <span style="font-size:13.5px;color:${MUT(52)}">${esc(S.auditDate||'Today')} · ${done} of ${total} logged</span>
-      <span style="flex:1"></span>
-      <button data-act="rules" style="background:none;border:none;padding:0;cursor:pointer;font-family:inherit;font-size:13px;color:${MUT(52)};text-decoration:underline">${S.showRules?'Hide':'How leads are flagged'}</button>
-    </div>
-    ${S.showRules?`<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:34px;padding:0 0 34px;max-width:1100px">${RULES.map(s=>`<div><div style="font-family:var(--font-heading);font-size:15px;font-weight:700;margin-bottom:5px">${esc(s[1])}</div><div style="font-size:13px;line-height:1.55;color:${MUT(60)};text-wrap:pretty">${esc(s[2])}</div></div>`).join('')}</div>`:''}
-    <div style="display:grid;grid-template-columns:168px 252px minmax(0,1fr);gap:44px;align-items:start">
-      <div>
-        <div style="font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:${MUT(40)};padding-bottom:10px">Category</div>
-        ${rail}
+    ${heroQueue()}
+    ${S.showRules?`<div class="ls-rules">${RULES.map(r=>`<div><div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">${ic(['ph-funnel','ph-check-square','ph-gauge','ph-list-numbers'][+r[0]-1]||'ph-circle',15,'var(--color-accent)')}<div style="font-family:var(--font-heading);font-size:15px;font-weight:700">${esc(r[1])}</div></div><div style="font-size:13px;line-height:1.55;color:${MUT(60)};text-wrap:pretty">${esc(r[2])}</div></div>`).join('')}</div>`:''}
+    <div class="ls-3col">
+      <div class="ls-rail">
+        ${kicker('Category',10)}
+        <div style="margin-left:-12px">${rail}</div>
       </div>
       <div>
-        <div style="font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:${MUT(40)};padding:0 0 10px 14px">${dl.length} lead${dl.length===1?'':'s'}</div>
-        <div style="border-top:1px solid var(--color-divider)">${rows}</div>
+        ${kicker(dl.length+' lead'+(dl.length===1?'':'s')+' &middot; worst first',10)}
+        <div style="border-top:1px solid var(--color-text)">${rows}</div>
       </div>
       ${auditPanel()}
     </div></div>`;
@@ -710,15 +826,21 @@ function auditPanel(){
   const tl=(l.timeline||[]).map((r,i)=>{
     const dot=r.kind==='done'?'width:9px;height:9px;border-radius:999px;background:var(--color-text)':r.kind==='miss'?'width:9px;height:9px;border-radius:999px;border:1.5px solid var(--color-accent-2)':'width:9px;height:9px;border-radius:999px;border:1.5px solid '+MUT(28);
     const conn=i>0?`<span style="flex:1;height:1px;margin-top:4px;min-width:18px;background:${MUT(18)}"></span>`:'';
-    return conn+`<span style="display:flex;flex-direction:column;align-items:center;gap:8px;width:92px;flex:none"><span style="${dot}"></span><span style="font-size:11px;line-height:1.4;text-align:center;color:${MUT(58)}">${esc(r.label)}</span></span>`;}).join('');
+    return conn+`<span style="display:flex;flex-direction:column;align-items:center;gap:8px;width:96px;flex:none"><span style="${dot}"></span><span style="font-size:11.5px;line-height:1.4;text-align:center;color:var(--color-text)">${esc(r.what||'')}</span><span style="font-size:11px;line-height:1.3;text-align:center;color:${MUT(45)}">${esc(r.when||'')}</span></span>`;}).join('');
   const sev=SEVS.map(s=>`<button data-act="sev" data-v="${s[0]}" style="background:none;border:none;padding:0 0 3px;cursor:pointer;font-family:inherit;font-size:13.5px;color:${a.sev===s[0]?'var(--color-text)':MUT(45)};font-weight:${a.sev===s[0]?'600':'400'};border-bottom:1.5px solid ${a.sev===s[0]?'var(--color-text)':'transparent'}">${s[1]}</button>`).join('');
 
   return `<div>
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding-bottom:10px">
+      ${catBadge(l.cat)}
+      ${done?`<span class="ls-badge" style="background:var(--color-accent-100);color:var(--color-accent-800)">${ic('ph-check-circle',13)}RCA logged</span>`:''}
+      <span style="flex:1"></span>
+      <span style="font-size:12.5px;color:${MUT(45)};font-variant-numeric:tabular-nums">${rank} of ${dl.length}</span>
+    </div>
     <div style="display:flex;align-items:baseline;gap:14px;flex-wrap:wrap">
-      <h3 style="margin:0;font-family:var(--font-heading);font-size:29px;font-weight:700;letter-spacing:-.01em">${esc(l.name)}</h3>
+      <h3 style="margin:0;font-family:var(--font-heading);font-size:31px;font-weight:700;letter-spacing:-.015em">${esc(l.name)}</h3>
       <span style="font-size:13px;color:${MUT(48)}">${esc(l.meta)}</span>
     </div>
-    <div style="font-size:13.5px;color:${MUT(55)};padding:5px 0 0">LRM ${esc(l.LRM)} · ${esc(cat.name)} · ${rank} of ${dl.length} in this category</div>
+    <div style="display:flex;align-items:center;gap:7px;font-size:13.5px;color:${MUT(55)};padding:6px 0 0">${ic('ph-user-circle',15,MUT(38))}LRM ${esc(l.LRM)}</div>
 
     <div style="padding:26px 0 22px;max-width:70ch">
       ${kicker('What breached')}
@@ -752,14 +874,14 @@ function auditPanel(){
     </div>
 
     <div style="display:flex;align-items:center;gap:24px;flex-wrap:wrap;padding:32px 0 0">
-      <button data-act="prev" style="background:none;border:none;padding:0;cursor:pointer;font-family:inherit;font-size:13.5px;color:${MUT(52)};text-decoration:underline">← Previous</button>
+      <button data-act="prev" class="ls-btn" style="background:none;border:none;padding:0;font-size:13.5px;color:${MUT(52)};display:inline-flex;align-items:center;gap:7px">${ic('ph-arrow-left',14)}Previous</button>
       <span style="flex:1"></span>
       ${done
-        ? `<span style="font-size:13px;color:${MUT(50)}">Submitted${a.at?' · '+esc(a.at):''}</span>
-           <button data-act="reopen" style="background:none;border:none;padding:0;cursor:pointer;font-family:inherit;font-size:13px;color:${MUT(52)};text-decoration:underline">Edit</button>
-           <button data-act="next" style="cursor:pointer;font-family:inherit;font-size:14px;font-weight:600;padding:10px 20px;border:1px solid var(--color-text);background:var(--color-text);color:var(--color-bg);border-radius:2px">Next lead →</button>`
-        : `<span style="font-size:12.5px;color:${ready?MUT(50):'var(--color-accent-2-800)'}">${ready?'Ready to submit':esc(blocker)}</span>
-           <button data-act="submitRca" ${ready?'':'aria-disabled="true"'} style="cursor:${ready?'pointer':'not-allowed'};font-family:inherit;font-size:14px;font-weight:600;padding:10px 22px;border-radius:2px;border:1px solid ${ready?'var(--color-text)':MUT(22)};background:${ready?'var(--color-text)':'transparent'};color:${ready?'var(--color-bg)':MUT(38)}">Submit RCA</button>`}
+        ? `<span style="display:flex;align-items:center;gap:7px;font-size:13px;color:${MUT(50)}">${ic('ph-check-circle',15,'var(--color-accent)')}Submitted${a.at?' · '+esc(a.at):''}</span>
+           <button data-act="reopen" class="ls-btn" style="background:none;border:none;padding:0;font-size:13px;color:${MUT(52)};text-decoration:underline">Edit</button>
+           <button data-act="next" class="ls-btn ls-btn-solid" style="font-size:14px;font-weight:600;padding:11px 20px;display:inline-flex;align-items:center;gap:8px">Next lead ${ic('ph-arrow-right',15)}</button>`
+        : `<span style="display:flex;align-items:center;gap:7px;font-size:12.5px;color:${ready?MUT(50):'var(--color-accent-2-800)'}">${ready?ic('ph-check',14,'var(--color-accent)'):ic('ph-warning-circle',14,'var(--color-accent-2)')}${ready?'Ready to submit':esc(blocker)}</span>
+           <button data-act="submitRca" class="ls-btn${ready?' ls-btn-solid':''}" ${ready?'':'aria-disabled="true"'} style="${ready?'':'cursor:not-allowed;border:1px solid '+MUT(22)+';background:transparent;color:'+MUT(38)+';'}font-size:14px;font-weight:600;padding:11px 24px">Submit RCA</button>`}
     </div>
   </div>`;
 }
@@ -769,27 +891,40 @@ function adherView(){
   const actionsSet=L().filter(l=>{const x=S.audits[l.id];return x&&x.reason&&x.action&&x.action!=='No action needed';}).length;
   const hi=L().filter(l=>{const x=S.audits[l.id];return x&&x.reason&&x.sev==='high';}).length;
   const mtd=mtdStats();
-  const stat=(v,lbl,s)=>`<div><div style="font-family:var(--font-heading);font-size:40px;line-height:1;font-weight:700">${v}</div><div style="font-size:13px;color:${MUT(55)};padding-top:6px">${lbl}</div>${s?`<div style="font-size:12px;color:${MUT(40)};padding-top:2px">${s}</div>`:''}</div>`;
-  const gaps=CATS.map(c=>{const dl=catLeads(c.key),d2=dl.filter(l=>rcaDone(l.id)).length;
-    return `<div style="display:flex;align-items:baseline;gap:12px;padding:9px 0;border-bottom:1px solid var(--color-divider)">
-      <span style="font-size:14px">${esc(c.name)}</span><span style="flex:1"></span>
-      <span style="font-size:13.5px;font-variant-numeric:tabular-nums;color:${dl.length&&d2===dl.length?MUT(38):'var(--color-text)'}">${d2} / ${dl.length}</span></div>`;}).join('');
+  const stat=(v,lbl,s,icon,tone)=>`<div>
+    <div style="display:flex;align-items:center;gap:8px">${icon?ic(icon,17,tone||MUT(38)):''}<div style="font-family:var(--font-heading);font-size:40px;line-height:1;font-weight:700;font-variant-numeric:tabular-nums">${v}</div></div>
+    <div style="font-size:13px;color:${MUT(55)};padding-top:7px">${lbl}</div>${s?`<div style="font-size:12px;color:${MUT(40)};padding-top:2px">${s}</div>`:''}</div>`;
+  const gaps=CATS.map(c=>{const dl=catLeads(c.key),d2=dl.filter(l=>rcaDone(l.id)).length,cs=cstyle(c.key);
+    const pc=dl.length?d2/dl.length*100:0;
+    return `<div style="padding:11px 0;border-bottom:1px solid var(--color-divider)">
+      <div style="display:flex;align-items:center;gap:9px">${ic(cs.icon,15,cs.tone)}
+        <span style="font-size:14px">${esc(c.name)}</span><span style="flex:1"></span>
+        <span style="font-size:13.5px;font-variant-numeric:tabular-nums;color:${dl.length&&d2===dl.length?MUT(38):'var(--color-text)'}">${d2} / ${dl.length}</span></div>
+      <div style="padding:8px 0 0 24px">${bar(pc,cs.tone)}</div></div>`;}).join('');
   const LRMs=R().map(r=>{const mine=L().filter(l=>l.LRM===r.name),sd=mine.filter(l=>rcaDone(l.id)).length;
-    return `<div style="display:flex;align-items:baseline;gap:12px;padding:9px 0;border-bottom:1px solid var(--color-divider)">
-      <span style="font-size:14px">${esc(r.name)}</span><span style="flex:1"></span>
-      <span style="font-size:13px;color:${MUT(48)}">${r.flagged} flagged</span>
-      <span style="font-size:13.5px;font-variant-numeric:tabular-nums;min-width:6ch;text-align:right">${sd} done</span></div>`;}).join('');
+    const pc=mine.length?sd/mine.length*100:0;
+    return `<div style="padding:11px 0;border-bottom:1px solid var(--color-divider)">
+      <div style="display:flex;align-items:center;gap:10px">
+        <span style="width:26px;height:26px;flex:none;display:grid;place-items:center;border-radius:999px;background:${MUT(7)};font-size:10.5px;font-weight:700;color:${MUT(65)}">${esc(r.ini)}</span>
+        <span style="font-size:14px">${esc(r.name)}</span><span style="flex:1"></span>
+        <span style="font-size:13px;color:${MUT(48)}">${r.flagged} flagged</span>
+        <span style="font-size:13.5px;font-variant-numeric:tabular-nums;min-width:6ch;text-align:right">${sd} done</span></div>
+      <div style="padding:8px 0 0 36px">${bar(pc,'var(--color-text)')}</div></div>`;}).join('');
   const emptyLrm=`<div style="padding:10px 0;font-size:13px;color:${MUT(45)}">No LRMs in today’s queue.</div>`;
   return `<div class="wrap" style="padding-bottom:80px;animation:lsfade .25s ease">
-    <div style="padding:32px 0 30px">
-      <h2 style="margin:0;font-size:34px;font-weight:700;letter-spacing:-.015em">My adherence</h2>
-      <div style="font-size:13.5px;color:${MUT(52)};padding-top:4px">${esc(S.auditDate||'Today')} · same-day cutoff at 7 PM</div>
+    <div style="padding:38px 0 26px">
+      ${kicker(esc(S.auditDate||'Today')+' &middot; same-day cutoff at 7 PM',10)}
+      <h2 style="margin:0;font-family:var(--font-heading);font-size:44px;line-height:1;font-weight:700;letter-spacing:-.02em">My adherence</h2>
+      <div style="padding-top:20px;display:flex;align-items:center;gap:16px;max-width:640px">
+        <span style="flex:1">${bar(total?done/total*100:0,done===total&&total?'var(--color-accent)':'var(--color-text)')}</span>
+        <span style="font-size:12.5px;font-variant-numeric:tabular-nums;color:${MUT(50)}">${total?Math.round(done/total*100):0}% of today</span>
+      </div>
     </div>
     <div style="display:flex;gap:64px;flex-wrap:wrap;padding-bottom:46px">
-      ${stat(done+' <span style="color:'+MUT(30)+'">/ '+total+'</span>','Logged today',miss?miss+' still open':(total?'all clear':''))}
-      ${stat(mtd.logged,'Logged this month','across '+mtd.days+' day'+(mtd.days===1?'':'s'))}
-      ${stat(actionsSet,'Actions assigned','')}
-      ${stat(hi,'High severity','')}
+      ${stat(done+' <span style="color:'+MUT(30)+'">/ '+total+'</span>','Logged today',miss?miss+' still open':(total?'all clear':''),'ph-check-square',miss?MUT(38):'var(--color-accent)')}
+      ${stat(mtd.logged,'Logged this month','across '+mtd.days+' day'+(mtd.days===1?'':'s'),'ph-calendar-dots')}
+      ${stat(actionsSet,'Actions assigned','','ph-flag-pennant')}
+      ${stat(hi,'High severity','','ph-warning-octagon',hi?'var(--color-accent-2)':MUT(38))}
     </div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:64px;align-items:start;max-width:1100px">
       <div><div style="font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:${MUT(40)};padding-bottom:6px">Coverage by category</div><div style="border-top:1px solid var(--color-text)">${gaps}</div></div>
@@ -834,43 +969,294 @@ function rcaView(){
     </div>
     <div style="display:flex;flex-direction:column;gap:14px">${cards}</div></div>`;
 }
-function ensureAuditors(){if(S.rcaAuditors==null){try{const v=JSON.parse(localStorage.getItem('ls_rca_auditor_emails')||'null');S.rcaAuditors=Array.isArray(v)?v:DEFAULT_AUDITORS.slice();}catch(e){S.rcaAuditors=DEFAULT_AUDITORS.slice();}}}
-function persistAuditors(){try{localStorage.setItem('ls_rca_auditor_emails',JSON.stringify(S.rcaAuditors));}catch(e){}}
+// ---- access control (shared, server-side) ----
+// Overrides live in the Access_Overrides tab via /api/access, so a change by one admin is
+// seen by every admin. The old auditor list lived in localStorage, which meant it was a
+// personal note, not a setting.
+const ROLE_OPTS=[['','Org chart'],['tl','Team Lead'],['zsm','Zonal Manager'],['ados','ADOS'],['auditor','RCA auditor'],['admin','Admin'],['none','No access']];
+const ROLE_WHY={'':'Role comes from EmployeeMaster reporting lines.',
+  tl:'Reviews their own team\u2019s flagged leads.',
+  zsm:'Sees team progress across their TLs.',
+  ados:'Sees team progress across their region.',
+  auditor:'Reviews any TL\u2019s completed RCAs.',
+  admin:'Every screen, every team, plus these settings.',
+  none:'Signed in but blocked \u2014 use for leavers before HR updates.'};
+function ensureAuditors(){if(S.rcaAuditors==null)S.rcaAuditors=(S.serverAuditors||[]).slice();}
+async function loadAccess(){
+  if(SAMPLE){S.access=S.access||{};return;}
+  try{const r=await fetch('/api/access',{headers:authHeaders()});
+    if(!r.ok)return;const j=await r.json();S.access=j.overrides||{};render();}catch(e){}
+}
+async function saveAccess(email,role){
+  const em=norm(email);if(!em)return;
+  if(SAMPLE){S.access=S.access||{};if(role)S.access[em]={role};else delete S.access[em];render();return;}
+  S.accessBusy=em;S.accessErr='';render();
+  try{
+    const r=await fetch('/api/access',{method:'POST',
+      headers:Object.assign({'Content-Type':'application/json'},authHeaders()),
+      body:JSON.stringify({email:em,role})});
+    const j=await r.json().catch(()=>({}));
+    if(r.ok)S.access=j.overrides||{};
+    else S.accessErr=j.message||j.error||('HTTP '+r.status);
+  }catch(e){S.accessErr=String(e&&e.message||e);}
+  S.accessBusy='';render();
+}
+
 function buildDir(){
   const H=S.hier||[];const tl=new Map(),zsm=new Map(),ados=new Map();
-  H.forEach(a=>{if(a.tl_email)tl.set(a.tl_email,{name:a.tl_name||nameFromEmail(a.tl_email),email:a.tl_email});if(a.zsm_email)zsm.set(a.zsm_email,{name:a.zsm_name||nameFromEmail(a.zsm_email),email:a.zsm_email});if(a.ados_email)ados.set(a.ados_email,{name:a.ados_name||nameFromEmail(a.ados_email),email:a.ados_email});});
-  const scope=(f,e)=>H.filter(x=>x[f]===e).length;
-  const rows=[...[...ados.values()].map(p=>({...p,role:'ADOS',scope:scope('ados_email',p.email)})),...[...zsm.values()].map(p=>({...p,role:'ZSM',scope:scope('zsm_email',p.email)})),...[...tl.values()].map(p=>({...p,role:'TL',scope:scope('tl_email',p.email)})),...H.map(a=>({name:a.lrm_name,email:a.lrm_email,role:'LRM',scope:1}))];
+  H.forEach(h=>{if(h.tl_email)tl.set(h.tl_email,h.tl_name||nameFromEmail(h.tl_email));
+    if(h.zsm_email)zsm.set(h.zsm_email,h.zsm_name||nameFromEmail(h.zsm_email));
+    if(h.ados_email)ados.set(h.ados_email,h.ados_name||nameFromEmail(h.ados_email));});
+  const rows=[];
+  ados.forEach((n,e)=>rows.push({name:n,email:e,role:'ADOS',team:H.filter(h=>h.ados_email===e).length}));
+  zsm.forEach((n,e)=>rows.push({name:n,email:e,role:'ZSM',team:H.filter(h=>h.zsm_email===e).length}));
+  tl.forEach((n,e)=>rows.push({name:n,email:e,role:'TL',team:H.filter(h=>h.tl_email===e).length}));
+  H.forEach(h=>rows.push({name:h.lrm_name||nameFromEmail(h.lrm_email),email:h.lrm_email,role:'LRM',team:0}));
   return{rows,ados:ados.size,zsm:zsm.size,tl:tl.size,lrm:H.length};
 }
-function settingsView(){
-  ensureAuditors();
-  const admins=adminEmails(),me=(S.user&&S.user.email||'').toLowerCase();
+
+function accessPane(){
+  const admins=adminEmails(),me=norm((S.user&&S.user.email)||'');
   const dir=buildDir(),q=(S.dirQ||'').trim().toLowerCase();
-  const rows=dir.rows.filter(r=>!q||(r.name&&r.name.toLowerCase().includes(q))||(r.email&&r.email.toLowerCase().includes(q)));
-  const em=`font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px;color:${MUT(70)}`;
-  const adminRows=admins.map(e=>`<div style="display:flex;align-items:center;justify-content:space-between;gap:10px"><span style="${em}">${esc(e)}</span>${e===me?'<span class="tag tag-accent">You</span>':''}</div>`).join('');
-  const audRows=S.rcaAuditors.length?S.rcaAuditors.map(e=>`<div style="display:flex;align-items:center;justify-content:space-between;gap:10px"><span style="${em}">${esc(e)}</span><div style="display:flex;align-items:center;gap:8px">${e===me?'<span class="tag tag-accent">You</span>':''}<button class="btn" data-act="auditorRemove" data-v="${esc(e)}" title="Remove" style="width:26px;height:26px;padding:0;border:1px solid var(--color-divider);font-size:14px;line-height:1;color:${MUT(60)}">×</button></div></div>`).join(''):`<span style="font-size:12.5px;color:${MUT(55)}">No RCA auditors configured.</span>`;
-  const stat=(l,v,s)=>`<div class="card elev-sm" style="padding:20px 22px;gap:4px"><div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:${MUT(55)}">${l}</div><div style="font-family:var(--font-heading);font-size:34px;line-height:1">${v}</div><div style="font-size:11.5px;color:${MUT(55)}">${s}</div></div>`;
-  const trows=rows.length?rows.map(r=>`<tr><td><span style="display:flex;align-items:center;gap:9px"><span style="width:26px;height:26px;flex:none;display:grid;place-items:center;border-radius:999px;background:var(--color-accent-200);color:var(--color-accent-800);font-size:10px;font-weight:700">${esc(ini2(r.name))}</span><span style="font-weight:600;font-size:13px">${esc(r.name||'—')}</span></span></td><td><span style="${em}">${esc(r.email)}</span></td><td style="text-align:center"><span class="${ROLECLS[r.role]}">${r.role}</span></td><td style="text-align:center">${r.scope}</td></tr>`).join(''):`<tr><td colspan="4" style="text-align:center;padding:24px;color:${MUT(55)}">No matches</td></tr>`;
-  return `<div class="wrap" style="padding-bottom:44px;animation:lsfade .25s ease">
-    <div style="padding:14px 0 20px"><h2 style="margin:0;font-size:30px">Settings</h2><div style="font-size:13.5px;color:${MUT(60)}">Admin-only · access lists and the resolved org chart — who sees what, and why.</div></div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;padding-bottom:20px">
-      <div class="card elev-sm" style="padding:22px 24px;gap:6px"><div style="font-size:14px;font-weight:700">Admin access</div><div style="font-size:12px;color:${MUT(60)};margin-bottom:8px">Unrestricted — sees every team and screen, regardless of org position.</div><div style="display:flex;flex-direction:column;gap:10px">${adminRows}</div><div style="font-size:11.5px;color:${MUT(48)};line-height:1.5;margin-top:12px">Fixed in server config (<code>ADMIN_EMAILS</code>). Changing this list needs a redeploy.</div></div>
-      <div class="card elev-sm" style="padding:22px 24px;gap:6px"><div style="font-size:14px;font-weight:700">RCA auditors</div><div style="font-size:12px;color:${MUT(60)};margin-bottom:8px">Can open the RCA audit tab and review any TL's root-cause analysis across teams.</div><div style="display:flex;flex-direction:column;gap:10px">${audRows}</div><div style="display:flex;gap:8px;margin-top:14px"><input class="input" data-act="auditorInput" type="email" value="${esc(S.newAuditor||'')}" placeholder="name@solarsquare.in" style="flex:1"><button class="btn btn-primary" data-act="auditorAdd" style="flex:0 0 auto">Add</button></div><div style="font-size:11.5px;color:${MUT(48)};line-height:1.5;margin-top:12px">Saved to this browser only (not shared with other admins). For a permanent, company-wide change, set the <code>RCA_AUDITOR_EMAILS</code> Vercel env var instead.</div></div>
+  const ov=S.access||{};
+  const kick=t=>`<div style="font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:${MUT(40)};padding-bottom:8px">${t}</div>`;
+  const mono=`font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px;color:${MUT(65)}`;
+
+  // everyone the app knows about, plus anyone granted access who isn't in the org chart
+  const seen={},people=[];
+  dir.rows.forEach(r=>{const e=norm(r.email);if(!e||seen[e])return;seen[e]=1;people.push(r);});
+  admins.forEach(e=>{const n=norm(e);if(!seen[n]){seen[n]=1;people.push({name:nameFromEmail(n),email:n,role:'\u2014',team:0});}});
+  Object.keys(ov).forEach(e=>{if(!seen[e]){seen[e]=1;people.push({name:nameFromEmail(e),email:e,role:'\u2014',team:0});}});
+
+  const shown=people.filter(r=>{
+    if(S.accessFilter==='granted'&&!(ov[norm(r.email)]||admins.includes(norm(r.email))))return false;
+    if(S.accessFilter==='managers'&&['TL','ZSM','ADOS'].indexOf(r.role)<0)return false;
+    if(!q)return true;
+    return (r.name||'').toLowerCase().includes(q)||(r.email||'').toLowerCase().includes(q);
+  }).slice(0,120);
+
+  const th=`padding:0 12px 9px;font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;font-weight:400;color:${MUT(45)};border-bottom:2px solid var(--color-text);text-align:left`;
+  const td=`padding:10px 12px;border-bottom:1px solid var(--color-divider);vertical-align:middle`;
+  const rows=shown.map(r=>{
+    const e=norm(r.email),o=ov[e],envAdmin=admins.includes(e),busy=S.accessBusy===e;
+    const eff=envAdmin?'admin':(o?o.role:'');
+    const sel=ROLE_OPTS.map(([v,l])=>`<option value="${v}" ${eff===v?'selected':''}>${esc(l)}</option>`).join('');
+    return `<tr>
+      <td style="${td}"><div style="font-weight:600;font-size:14px">${esc(r.name)}${e===me?`<span style="font-weight:400;color:${MUT(45)}"> \u00b7 you</span>`:''}</div>
+        <div style="${mono}">${esc(e)}</div></td>
+      <td style="${td};color:${MUT(55)};font-size:13px">${esc(r.role)}${r.team?` <span style="color:${MUT(38)}">\u00b7 ${r.team}</span>`:''}</td>
+      <td style="${td}">${envAdmin
+        ? `<span style="font-size:13px">Admin <span style="color:${MUT(45)}">\u00b7 fixed in config</span></span>`
+        : `<select data-act="accessRole" data-v="${e}" ${busy?'disabled':''} style="font-family:inherit;font-size:13.5px;padding:5px 0;border:none;border-bottom:1px solid ${o?'var(--color-text)':MUT(24)};background:none;color:var(--color-text);min-width:15ch">${sel}</select>`}
+      </td>
+      <td style="${td};font-size:12.5px;color:${MUT(50)};max-width:34ch">${busy?'Saving\u2026':esc(o?(ROLE_WHY[o.role]||''):'')}</td>
+    </tr>`;}).join('');
+
+  const grantCount=Object.keys(ov).length;
+  const filt=(k,l)=>`<button data-act="accessFilter" data-v="${k}" style="background:none;border:none;padding:0 0 3px;cursor:pointer;font-family:inherit;font-size:13px;color:${(S.accessFilter||'all')===k?'var(--color-text)':MUT(48)};font-weight:${(S.accessFilter||'all')===k?'600':'400'};border-bottom:1.5px solid ${(S.accessFilter||'all')===k?'var(--color-text)':'transparent'}">${l}</button>`;
+  const stat=(v,l)=>`<div><div style="font-family:var(--font-heading);font-size:34px;line-height:1;font-weight:700">${v}</div><div style="font-size:12.5px;color:${MUT(52)};padding-top:5px">${l}</div></div>`;
+
+  return `<div style="animation:lsfade .2s ease">
+    <div style="font-size:13.5px;line-height:1.6;color:${MUT(55)};padding-bottom:32px;max-width:76ch;text-wrap:pretty">Roles come from <b>EmployeeMaster</b> by default. Change one here to override it \u2014 saved centrally, so every admin sees the same list, and it takes effect at the person\u2019s next sign-in.</div>
+
+    <div style="display:flex;gap:56px;flex-wrap:wrap;padding-bottom:38px">
+      ${stat(dir.ados,'ADOS')}${stat(dir.zsm,'Zonal managers')}${stat(dir.tl,'Team leads')}${stat(dir.lrm,'LRMs')}${stat(grantCount,'Overrides set')}
     </div>
-    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:18px;padding-bottom:20px">${stat('ADOS',dir.ados,'reporting lines')}${stat('ZSMs',dir.zsm,'reporting lines')}${stat('Team Leads',dir.tl,'reporting lines')}${stat('LRMs',dir.lrm,'in EmployeeMaster')}</div>
-    <div class="card elev-sm" style="padding:22px 24px;gap:6px;margin-bottom:20px">
-      <div style="font-size:14px;font-weight:700">Sample data · layout preview</div>
-      <div style="font-size:12px;color:${MUT(60)};line-height:1.55;max-width:70ch">Opens every screen filled with invented leads and a day already half-audited — for walking stakeholders through the tool, or reviewing the interface when today’s queue is empty. Sample mode is banner-marked throughout, writes nothing to the RCA log, and is only ever entered deliberately. Once in it, the banner’s <b>View as</b> toggle switches between the Team Lead and Admin experience without reloading.</div>
-      <div style="display:flex;gap:10px;margin-top:14px">
+
+    ${S.accessErr?`<div style="font-size:13px;color:var(--color-accent-2-800);padding-bottom:18px;max-width:76ch">Could not save: ${esc(S.accessErr)}</div>`:''}
+
+    <div style="display:flex;align-items:baseline;gap:22px;flex-wrap:wrap;padding-bottom:14px">
+      ${filt('all','Everyone')}${filt('managers','Managers')}${filt('granted','Overridden')}
+      <span style="flex:1"></span>
+      <input data-act="dirSearch" value="${esc(S.dirQ||'')}" placeholder="Search name or email\u2026" style="font-family:inherit;font-size:13.5px;padding:5px 0;border:none;border-bottom:1px solid ${MUT(24)};background:none;color:var(--color-text);min-width:26ch">
+    </div>
+
+    <table style="width:100%;border-collapse:collapse">
+      <thead><tr><th style="${th};padding-left:0">Person</th><th style="${th}">Org chart</th><th style="${th}">Access in this tool</th><th style="${th}">Effect</th></tr></thead>
+      <tbody>${rows||`<tr><td colspan="4" style="${td};color:${MUT(45)};font-size:13.5px">Nobody matches that search.</td></tr>`}</tbody>
+    </table>
+
+    <div style="display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;padding:26px 0 0">
+      ${kick('Grant access to someone not listed')}
+    </div>
+    <div style="display:flex;align-items:baseline;gap:14px;flex-wrap:wrap">
+      <input data-act="accessNewEmail" type="email" value="${esc(S.newAccessEmail||'')}" placeholder="name@solarsquare.in" style="font-family:inherit;font-size:14px;padding:6px 0;border:none;border-bottom:1px solid ${MUT(24)};background:none;color:var(--color-text);min-width:28ch">
+      <select data-act="accessNewRole" style="font-family:inherit;font-size:14px;padding:6px 0;border:none;border-bottom:1px solid ${MUT(24)};background:none;color:var(--color-text)">${ROLE_OPTS.filter(o=>o[0]).map(([v,l])=>`<option value="${v}" ${(S.newAccessRole||'auditor')===v?'selected':''}>${esc(l)}</option>`).join('')}</select>
+      <button data-act="accessAdd" style="cursor:pointer;font-family:inherit;font-size:13.5px;font-weight:600;padding:8px 18px;border:1px solid var(--color-text);background:var(--color-text);color:var(--color-bg);border-radius:2px">Grant</button>
+    </div>
+    <div style="font-size:12.5px;line-height:1.6;color:${MUT(45)};max-width:76ch;padding-top:26px">
+      Admins listed in the <code>ADMIN_EMAILS</code> server config can\u2019t be changed here \u2014 that\u2019s deliberate, so nobody can lock the owners out through the UI. Everything else is an override you can clear back to \u201cOrg chart\u201d at any time.
+    </div>
+
+    <div style="padding-top:44px">
+      ${kick('Demonstration mode')}
+      <div style="font-size:13.5px;line-height:1.6;color:${MUT(58)};max-width:76ch;text-wrap:pretty">Opens every screen filled with invented leads and a day already half-audited \u2014 for walking stakeholders through the tool, or checking the interface when today\u2019s queue is empty. Banner-marked throughout, writes nothing, and switchable between the TL and Admin experience in place.</div>
+      <div style="display:flex;gap:22px;align-items:baseline;padding-top:16px">
         ${SAMPLE
-          ? `<a class="btn btn-primary" href="${esc(location.pathname)}">Return to live data</a>`
-          : `<a class="btn btn-secondary" href="${esc(location.pathname)}?sample=admin">Open with sample data</a>`}
-        <a class="btn btn-ghost" href="/api/debug" target="_blank">Run queue diagnostic</a>
+          ? `<a href="${esc(location.pathname)}" style="font-size:13.5px">Return to live data</a>`
+          : `<a href="${esc(location.pathname)}?sample=admin" style="font-size:13.5px">Open demonstration mode</a>`}
+        <a href="/api/debug" target="_blank" style="font-size:13.5px">Run queue diagnostic</a>
       </div>
     </div>
-    <div class="card elev-sm" style="padding:0;overflow:hidden"><div style="padding:16px 20px;border-bottom:1px solid var(--color-divider)"><input class="input" data-act="dirSearch" value="${esc(S.dirQ||'')}" placeholder="Search name or email…" style="max-width:320px"></div><div style="max-height:440px;overflow:auto"><table class="table"><thead><tr><th>Name</th><th>Email</th><th style="text-align:center">Role</th><th style="text-align:center">Team size</th></tr></thead><tbody>${trows}</tbody></table></div></div>
+  </div>`;
+}
+// ---- Settings: three panes. Access is who may open what; Reporting lines is who owns
+// whom; Unmapped is the LRMs whose leads never reach anybody until they get a TL. ----
+const SET_TABS=[['access','People & access','ph-users-three'],
+                ['mapping','Reporting lines','ph-tree-structure'],
+                ['unmapped','Unmapped LRMs','ph-warning-diamond']];
+function tlDirectory(){
+  const m=new Map();
+  (S.hier||[]).forEach(h=>{if(!h.tl_email||m.has(h.tl_email))return;
+    m.set(h.tl_email,{email:h.tl_email,name:h.tl_name||nameFromEmail(h.tl_email),
+      zsm_email:h.zsm_email||'',zsm_name:h.zsm_name||'',ados_email:h.ados_email||'',
+      ados_name:h.ados_name||'',cluster:h.cluster||''});});
+  return [...m.values()].sort((a,b)=>String(a.name).localeCompare(String(b.name)));
+}
+function tlOptions(sel){
+  return '<option value="">\u2014 no team lead \u2014</option>'+tlDirectory().map(t=>
+    '<option value="'+esc(t.email)+'" '+(norm(sel)===norm(t.email)?'selected':'')+'>'+esc(t.name)+(t.cluster?' \u00b7 '+esc(t.cluster):'')+'</option>').join('');
+}
+// Assigning a TL carries that TL's own ZSM and ADOS with it, so one choice completes the
+// whole chain instead of leaving a lead reviewable but not reportable.
+function chainFor(tlEmail){
+  const t=tlDirectory().find(x=>norm(x.email)===norm(tlEmail));
+  return t?{tl_email:t.email,tl_name:t.name,zsm_email:t.zsm_email,zsm_name:t.zsm_name,
+            ados_email:t.ados_email,ados_name:t.ados_name}
+          :{tl_email:'',tl_name:'',zsm_email:'',zsm_name:'',ados_email:'',ados_name:''};
+}
+async function loadMapping(){
+  if(SAMPLE){S.mapping=S.mapping||{};return;}
+  try{const r=await fetch('/api/mapping',{headers:authHeaders()});if(!r.ok)return;
+    const j=await r.json();S.mapping=j.mapping||{};render();}catch(e){}
+}
+async function saveMapping(items){
+  if(!items||!items.length)return;
+  if(SAMPLE){S.mapMsg='Sample mode \u2014 nothing was written.';render();return;}
+  S.mapBusy=String(items.length);S.mapErr='';S.mapMsg='';render();
+  try{
+    const r=await fetch('/api/mapping',{method:'POST',
+      headers:Object.assign({'Content-Type':'application/json'},authHeaders()),
+      body:JSON.stringify({items})});
+    const j=await r.json().catch(()=>({}));
+    if(r.ok){S.mapping=j.mapping||{};S.mapSel={};
+      S.mapMsg=items.length+' reporting line'+(items.length===1?'':'s')+' saved.';
+      await refreshQueue();}
+    else S.mapErr=j.message||j.error||('HTTP '+r.status);
+  }catch(e){S.mapErr=String(e&&e.message||e);}
+  S.mapBusy='';render();
+}
+// After a mapping edit the server cache would hide the change for five minutes, so ask
+// for a fresh pull and rebuild the model in place.
+async function refreshQueue(){
+  try{const r=await fetch('/api/queue?fresh=1',{headers:authHeaders()});
+    if(!r.ok)return;const j=await r.json();
+    S.unmapped=j.unmappedLrms||[];
+    if(j.mappingOverrides)S.mapping=j.mappingOverrides;
+    buildModel(j.queue||[],j.hierarchy||[]);}catch(e){}
+}
+
+function mappingPane(){
+  const ov=S.mapping||{},q=(S.mapQ||'').trim().toLowerCase();
+  const H=(S.hier||[]).slice().sort((a,b)=>String(a.lrm_name||a.lrm_email).localeCompare(String(b.lrm_name||b.lrm_email)));
+  const filt=S.mapFilter||'overridden';
+  let list=H.filter(h=>{
+    if(filt==='overridden'&&!ov[norm(h.lrm_email)])return false;
+    if(filt==='noTl'&&h.tl_email)return false;
+    if(!q)return true;
+    return (h.lrm_name||'').toLowerCase().includes(q)||(h.lrm_email||'').toLowerCase().includes(q)
+        ||(h.tl_name||'').toLowerCase().includes(q)||(h.cluster||'').toLowerCase().includes(q);
+  });
+  const shownAll=list.length; list=list.slice(0,80);
+  const th=`padding:0 12px 9px;font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;font-weight:400;color:${MUT(45)};border-bottom:2px solid var(--color-text);text-align:left`;
+  const td=`padding:11px 12px;border-bottom:1px solid var(--color-divider);vertical-align:middle`;
+  const mono=`font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;color:${MUT(58)}`;
+  const rows=list.map(h=>{
+    const e=norm(h.lrm_email),o=ov[e];
+    return `<tr class="ls-row">
+      <td style="${td}"><div style="font-weight:600;font-size:14px">${esc(h.lrm_name||nameFromEmail(e))}</div><div style="${mono}">${esc(e)}</div></td>
+      <td style="${td};font-size:13px;color:${MUT(58)}">${esc(h.cluster||'\u2014')}</td>
+      <td style="${td}">
+        <select data-act="mapTl" data-v="${esc(e)}" style="font-family:inherit;font-size:13.5px;padding:5px 0;border:none;border-bottom:1px solid ${o&&o.tl_email?'var(--color-accent)':MUT(24)};background:none;color:var(--color-text);min-width:20ch">${tlOptions(h.tl_email)}</select>
+      </td>
+      <td style="${td};font-size:12.5px;color:${MUT(52)}">${esc(h.zsm_name||nameFromEmail(h.zsm_email)||'\u2014')}<span style="color:${MUT(32)}"> \u00b7 </span>${esc(h.ados_name||nameFromEmail(h.ados_email)||'\u2014')}</td>
+      <td style="${td}">${o
+        ? `<span style="display:flex;align-items:center;gap:10px"><span class="ls-badge" style="background:var(--color-accent-100);color:var(--color-accent-800)">${ic('ph-pencil-simple-line',12)}Edited here</span><button class="ls-btn" data-act="mapClear" data-v="${esc(e)}" style="background:none;border:none;padding:0;font-size:12px;color:${MUT(50)};text-decoration:underline">Revert</button></span>`
+        : `<span style="font-size:12.5px;color:${MUT(40)}">EmployeeMaster</span>`}</td>
+    </tr>`;}).join('');
+  const filtBtn=(k,l)=>`<button class="ls-btn" data-act="mapFilter" data-v="${k}" style="background:none;border:none;padding:0 0 3px;font-size:13px;color:${filt===k?'var(--color-text)':MUT(48)};font-weight:${filt===k?'600':'400'};border-bottom:1.5px solid ${filt===k?'var(--color-text)':'transparent'}">${l}</button>`;
+  return `<div style="animation:lsfade .2s ease">
+    <div style="font-size:13.5px;line-height:1.6;color:${MUT(55)};padding-bottom:30px;max-width:76ch;text-wrap:pretty">Who an LRM reports to decides whose queue their leads land in. <b>EmployeeMaster</b> stays the source of truth and is never written to \u2014 changing a line here records an override on top of it, and picking a team lead carries that lead\u2019s ZSM and ADOS with it.</div>
+    ${S.mapErr?`<div style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--color-accent-2-800);padding-bottom:16px">${ic('ph-warning-circle',15,'var(--color-accent-2)')}Could not save: ${esc(S.mapErr)}</div>`:''}
+    ${S.mapMsg?`<div style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--color-accent-800);padding-bottom:16px">${ic('ph-check-circle',15,'var(--color-accent)')}${esc(S.mapMsg)}</div>`:''}
+    <div style="display:flex;align-items:baseline;gap:22px;flex-wrap:wrap;padding-bottom:14px">
+      ${filtBtn('overridden','Edited here ('+Object.keys(ov).length+')')}${filtBtn('noTl','No team lead')}${filtBtn('all','All LRMs ('+(S.hier||[]).length+')')}
+      <span style="flex:1"></span>
+      <input data-act="mapSearch" value="${esc(S.mapQ||'')}" placeholder="Search LRM, TL or cluster\u2026" style="font-family:inherit;font-size:13.5px;padding:5px 0;border:none;border-bottom:1px solid ${MUT(24)};background:none;color:var(--color-text);min-width:28ch">
+    </div>
+    <table style="width:100%;border-collapse:collapse">
+      <thead><tr><th style="${th};padding-left:0">LRM</th><th style="${th}">Cluster</th><th style="${th}">Reports to</th><th style="${th}">ZSM \u00b7 ADOS</th><th style="${th}">Source</th></tr></thead>
+      <tbody>${rows||`<tr><td colspan="5" style="${td};color:${MUT(45)};font-size:13.5px">${filt==='overridden'?'No reporting line has been changed in the app yet. Switch to \u201cAll LRMs\u201d or search for someone.':'Nobody matches that.'}</td></tr>`}</tbody>
+    </table>
+    ${shownAll>80?`<div style="font-size:12.5px;color:${MUT(45)};padding-top:14px">Showing the first 80 of ${shownAll} \u2014 narrow it with the search.</div>`:''}
+  </div>`;
+}
+
+function unmappedPane(){
+  const list=(S.unmapped||[]),sel=S.mapSel||{},nsel=Object.keys(sel).filter(k=>sel[k]).length;
+  const leads=list.reduce((a,b)=>a+(b.leads||0),0);
+  const td=`padding:11px 12px;border-bottom:1px solid var(--color-divider);vertical-align:middle`;
+  const th=`padding:0 12px 9px;font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;font-weight:400;color:${MUT(45)};border-bottom:2px solid var(--color-text);text-align:left`;
+  const mono=`font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;color:${MUT(58)}`;
+  if(!list.length)return `<div style="animation:lsfade .2s ease;display:flex;align-items:flex-start;gap:14px;max-width:66ch">
+    ${ic('ph-check-circle',28,'var(--color-accent)')}
+    <div><div style="font-family:var(--font-heading);font-size:22px;font-weight:700;padding-bottom:6px">Every LRM in today\u2019s queue has a team lead</div>
+    <div style="font-size:14px;line-height:1.6;color:${MUT(58)};text-wrap:pretty">Nothing is being dropped for want of a reporting line. If that changes, the LRMs concerned appear here with the number of leads stranded behind them.</div></div></div>`;
+  const rows=list.map(u=>{
+    const e=norm(u.lrm_email)||('name:'+(u.lrm_name||''));
+    return `<tr class="ls-row">
+      <td style="${td};width:34px"><input type="checkbox" data-act="unmapSel" data-v="${esc(e)}" ${sel[e]?'checked':''} style="width:15px;height:15px;accent-color:var(--color-accent);cursor:pointer"></td>
+      <td style="${td}"><div style="font-weight:600;font-size:14px">${esc(u.lrm_name||nameFromEmail(u.lrm_email)||'\u2014')}</div><div style="${mono}">${esc(u.lrm_email||'no email on the lead record')}</div></td>
+      <td style="${td};font-size:13px;color:${MUT(58)}">${esc(u.cluster||'\u2014')}</td>
+      <td style="${td};text-align:right;font-variant-numeric:tabular-nums;font-size:14px;font-weight:600;color:var(--color-accent-2-800)">${u.leads}</td>
+      <td style="${td}"><select data-act="mapTl" data-v="${esc(e)}" style="font-family:inherit;font-size:13.5px;padding:5px 0;border:none;border-bottom:1px solid ${MUT(24)};background:none;color:var(--color-text);min-width:20ch">${tlOptions('')}</select></td>
+    </tr>`;}).join('');
+  return `<div style="animation:lsfade .2s ease">
+    <div style="display:flex;align-items:flex-end;gap:48px;flex-wrap:wrap;padding-bottom:26px">
+      <div style="flex:1;min-width:280px">
+        <div style="display:flex;align-items:baseline;gap:14px;flex-wrap:wrap">
+          <div style="font-family:var(--font-heading);font-size:44px;line-height:1;font-weight:700;color:var(--color-accent-2)">${list.length}</div>
+          <div style="font-size:16px;color:${MUT(62)};padding-bottom:3px">LRMs with no team lead \u2014 <b>${leads}</b> leads nobody can review</div>
+        </div>
+        <div style="font-size:13.5px;line-height:1.6;color:${MUT(55)};padding-top:14px;max-width:76ch;text-wrap:pretty">These leads are dropped before the queue reaches an auditor, because there is no one to route them to. Give each LRM a team lead here and their leads appear in that lead\u2019s queue on the next pull \u2014 no EmployeeMaster edit needed.</div>
+      </div>
+    </div>
+    ${S.mapErr?`<div style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--color-accent-2-800);padding-bottom:16px">${ic('ph-warning-circle',15,'var(--color-accent-2)')}Could not save: ${esc(S.mapErr)}</div>`:''}
+    ${S.mapMsg?`<div style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--color-accent-800);padding-bottom:16px">${ic('ph-check-circle',15,'var(--color-accent)')}${esc(S.mapMsg)}</div>`:''}
+    <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;padding:0 0 16px">
+      <button class="ls-btn" data-act="unmapAll" style="background:none;border:none;padding:0;font-size:13px;color:${MUT(52)};text-decoration:underline">${nsel===list.length?'Clear selection':'Select all '+list.length}</button>
+      <span style="flex:1"></span>
+      <span style="font-size:13px;color:${nsel?'var(--color-text)':MUT(42)}">${nsel} selected</span>
+      <select data-act="bulkTl" style="font-family:inherit;font-size:13.5px;padding:6px 0;border:none;border-bottom:1px solid ${MUT(24)};background:none;color:var(--color-text);min-width:22ch">${tlOptions(S.mapBulkTl||'')}</select>
+      <button class="ls-btn ${nsel&&S.mapBulkTl?'ls-btn-solid':''}" data-act="bulkAssign" ${nsel&&S.mapBulkTl?'':'aria-disabled="true"'} style="font-size:13.5px;font-weight:600;padding:9px 18px;${nsel&&S.mapBulkTl?'':'cursor:not-allowed;border:1px solid '+MUT(20)+';background:none;color:'+MUT(36)+';'}">${S.mapBusy?'Saving\u2026':'Assign selected'}</button>
+    </div>
+    <table style="width:100%;border-collapse:collapse">
+      <thead><tr><th style="${th};padding-left:0"></th><th style="${th}">LRM</th><th style="${th}">Cluster</th><th style="${th};text-align:right">Leads held</th><th style="${th}">Assign to</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  </div>`;
+}
+
+function settingsView(){
+  const tab=S.setTab||'access';
+  const btn=([k,l,i])=>`<button class="ls-btn" data-act="setTab" data-v="${k}" style="background:none;border:none;padding:0 0 8px;font-size:14.5px;display:inline-flex;align-items:center;gap:8px;color:${tab===k?'var(--color-text)':MUT(50)};font-weight:${tab===k?'600':'400'};border-bottom:2px solid ${tab===k?'var(--color-text)':'transparent'}">${ic(i,17,tab===k?(k==='unmapped'&&(S.unmapped||[]).length?'var(--color-accent-2)':'var(--color-accent)'):MUT(40))}${l}${k==='unmapped'&&(S.unmapped||[]).length?`<span class="ls-badge" style="background:var(--color-accent-2-100);color:var(--color-accent-2-800)">${(S.unmapped||[]).length}</span>`:''}</button>`;
+  return `<div class="wrap" style="padding-bottom:90px;animation:lsfade .25s ease">
+    <div style="padding:38px 0 22px">
+      ${kicker('Administration',10)}
+      <h2 style="margin:0;font-family:var(--font-heading);font-size:44px;line-height:1;font-weight:700;letter-spacing:-.02em">Settings</h2>
+    </div>
+    <div style="display:flex;gap:34px;flex-wrap:wrap;padding-bottom:34px;border-bottom:1px solid var(--color-divider);margin-bottom:34px">${SET_TABS.map(btn).join('')}</div>
+    ${tab==='mapping'?mappingPane():tab==='unmapped'?unmappedPane():accessPane()}
   </div>`;
 }
 function renderKeepFocus(sel){render();const el=document.querySelector(sel);if(el){el.focus();try{const n=el.value.length;el.setSelectionRange(n,n);}catch(e){}}}
@@ -881,11 +1267,13 @@ function mgrView(){
   const doneFor=tl=>doneByTl(tl);
   const totAll=tls.reduce((s,t)=>s+t.total,0);
   const rows=tls.map(t=>{
-    const tot=t.total,dn=doneFor(t.email),open=tot-dn,mine=t.email===myTl;
-    const td=`padding:11px 10px;border-bottom:1px solid var(--color-divider);font-variant-numeric:tabular-nums;text-align:right`;
-    return `<tr>
+    const tot=t.total,dn=doneFor(t.email),open=tot-dn,mine=t.email===myTl,pc=tot?dn/tot*100:0;
+    const td=`padding:12px 10px;border-bottom:1px solid var(--color-divider);font-variant-numeric:tabular-nums;text-align:right`;
+    const tone=pc>=100?'var(--color-accent)':pc>=50?'var(--color-text)':'var(--color-accent-2)';
+    return `<tr class="ls-row">
       <td style="${td};text-align:left;padding-left:0"><span style="font-weight:600">${esc(t.name)}</span>${mine?`<span style="font-weight:400;color:${MUT(45)}"> · you</span>`:''}</td>
       <td style="${td};text-align:left;color:${MUT(58)}">${esc(t.cluster||'—')}</td>
+      <td style="${td};width:140px"><span style="display:flex;align-items:center;gap:9px">${bar(pc,tone)}<span style="font-size:12px;color:${MUT(50)};min-width:4ch;text-align:right">${Math.round(pc)}%</span></span></td>
       <td style="${td}">${tot}</td>
       <td style="${td}">${dn}</td>
       <td style="${td};${open?'':'color:'+MUT(32)}">${open||'—'}</td>
@@ -894,14 +1282,29 @@ function mgrView(){
   const catTot=CATS.map(c=>tls.reduce((s,t)=>s+catCount(t.email,c.key),0));
   const doneAll=tls.reduce((s,t)=>s+doneFor(t.email),0);
   const th=`padding:0 10px 9px;font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;font-weight:400;color:${MUT(45)};border-bottom:2px solid var(--color-text)`;
-  const head=`<tr><th style="${th};text-align:left;padding-left:0">Team lead</th><th style="${th};text-align:left">Cluster</th><th style="${th};text-align:right">To audit</th><th style="${th};text-align:right">Done</th><th style="${th};text-align:right">Open</th>${CATS.map(c=>`<th style="${th};text-align:right">${esc(c.short||c.name)}</th>`).join('')}</tr>`;
+  const head=`<tr><th style="${th};text-align:left;padding-left:0">Team lead</th><th style="${th};text-align:left">Cluster</th><th style="${th};text-align:right">Progress</th><th style="${th};text-align:right">To audit</th><th style="${th};text-align:right">Done</th><th style="${th};text-align:right">Open</th>${CATS.map(c=>`<th style="${th};text-align:right"><span style="display:inline-flex;align-items:center;gap:5px;justify-content:flex-end">${ic(cstyle(c.key).icon,13,cstyle(c.key).tone)}${esc(c.short||c.name)}</span></th>`).join('')}</tr>`;
   const tdf=`padding:11px 10px;border-bottom:1px solid var(--color-divider);font-variant-numeric:tabular-nums;text-align:right`;
-  const foot=`<tr><td style="${tdf};text-align:left;padding-left:0;font-weight:700;border-bottom:none;border-top:1px solid var(--color-text)">All teams</td><td style="${tdf};border-bottom:none;border-top:1px solid var(--color-text)"></td><td style="${tdf};font-weight:700;border-bottom:none;border-top:1px solid var(--color-text)">${totAll}</td><td style="${tdf};font-weight:700;border-bottom:none;border-top:1px solid var(--color-text)">${doneAll}</td><td style="${tdf};font-weight:700;border-bottom:none;border-top:1px solid var(--color-text)">${totAll-doneAll}</td>${catTot.map(n=>`<td style="${tdf};font-weight:700;border-bottom:none;border-top:1px solid var(--color-text)">${n||''}</td>`).join('')}</tr>`;
+  const foot=`<tr><td style="${tdf};text-align:left;padding-left:0;font-weight:700;border-bottom:none;border-top:1px solid var(--color-text)">All teams</td><td style="${tdf};border-bottom:none;border-top:1px solid var(--color-text)"></td><td style="${tdf};border-bottom:none;border-top:1px solid var(--color-text)"></td><td style="${tdf};font-weight:700;border-bottom:none;border-top:1px solid var(--color-text)">${totAll}</td><td style="${tdf};font-weight:700;border-bottom:none;border-top:1px solid var(--color-text)">${doneAll}</td><td style="${tdf};font-weight:700;border-bottom:none;border-top:1px solid var(--color-text)">${totAll-doneAll}</td>${catTot.map(n=>`<td style="${tdf};font-weight:700;border-bottom:none;border-top:1px solid var(--color-text)">${n||''}</td>`).join('')}</tr>`;
   if(!tls.length)return `<div class="wrap" style="padding-top:96px"><h2 style="margin:0 0 12px;font-size:34px;font-weight:700">No teams in today’s queue</h2><div style="font-size:15.5px;line-height:1.6;color:${MUT(60)};max-width:56ch;text-wrap:pretty">Nothing has been distributed across teams yet — either today’s export is empty, or its leads aren’t matching the mapping sheet.</div>${diagBlock()}</div>`;
   return `<div class="wrap" style="padding-bottom:80px;animation:lsfade .25s ease">
-    <div style="padding:32px 0 30px">
-      <h2 style="margin:0;font-size:34px;font-weight:700;letter-spacing:-.015em">Team progress</h2>
-      <div style="font-size:13.5px;color:${MUT(52)};padding-top:4px">${esc(S.auditDate||'Today')} · ${totAll} flagged leads across ${tls.length} team${tls.length===1?'':'s'}</div>
+    <div style="padding:38px 0 28px">
+      ${kicker(esc(S.auditDate||'Today'),10)}
+      <div style="display:flex;align-items:flex-end;gap:48px;flex-wrap:wrap">
+        <div style="flex:1;min-width:300px">
+          <div style="display:flex;align-items:baseline;gap:14px;flex-wrap:wrap">
+            <h2 style="margin:0;font-family:var(--font-heading);font-size:54px;line-height:.98;font-weight:700;letter-spacing:-.02em;font-variant-numeric:tabular-nums">${doneAll}<span style="color:${MUT(28)}"> / ${totAll}</span></h2>
+            <span style="font-size:17px;color:${MUT(62)};padding-bottom:5px">RCAs logged across ${tls.length} team${tls.length===1?'':'s'}</span>
+          </div>
+        </div>
+        <div style="display:flex;gap:44px;flex-wrap:wrap;padding-bottom:4px">
+          <div><div style="font-family:var(--font-heading);font-size:30px;line-height:1;font-weight:700;color:${totAll-doneAll?'var(--color-accent-2)':MUT(32)}">${totAll-doneAll}</div><div style="font-size:12px;color:${MUT(52)};padding-top:6px">Still open</div></div>
+          <div><div style="font-family:var(--font-heading);font-size:30px;line-height:1;font-weight:700">${tls.filter(t=>doneFor(t.email)>=t.total&&t.total).length}</div><div style="font-size:12px;color:${MUT(52)};padding-top:6px">Teams clear</div></div>
+        </div>
+      </div>
+      <div style="padding-top:22px;display:flex;align-items:center;gap:16px">
+        <span style="flex:1">${bar(totAll?doneAll/totAll*100:0,doneAll===totAll&&totAll?'var(--color-accent)':'var(--color-text)')}</span>
+        <span style="font-size:12.5px;font-variant-numeric:tabular-nums;color:${MUT(50)}">${totAll?Math.round(doneAll/totAll*100):0}%</span>
+      </div>
     </div>
     <table style="width:100%;border-collapse:collapse;font-size:14px"><thead>${head}</thead><tbody>${rows}${foot}</tbody></table>
     <div style="font-size:12.5px;line-height:1.6;color:${MUT(48)};max-width:76ch;padding-top:20px">Live from today’s queue and the shared RCA log. “Done” counts the latest logged RCA per lead${S.rcaPending?` · <b>${S.rcaPending} of yours still syncing</b>`:''}${S.rcaErr?` · <span style="color:var(--color-accent-2-700)">log write failing: ${esc(S.rcaErr)}</span>`:''}</div>
@@ -942,21 +1345,46 @@ document.addEventListener('click',e=>{
   else if(act==='rcaAccept'){const cur=S.rcaReview[v]||{};patchRv(v,{verdict:cur.verdict==='accept'?null:'accept'});render();}
   else if(act==='rcaRework'){const cur=S.rcaReview[v]||{};patchRv(v,{verdict:cur.verdict==='rework'?null:'rework'});render();}
   else if(act==='rcaNotify'){patchRv(v,{notified:true});render();}
-  else if(act==='auditorAdd'){ensureAuditors();const e=(S.newAuditor||'').trim().toLowerCase();if(e&&!S.rcaAuditors.includes(e)){S.rcaAuditors=[...S.rcaAuditors,e];persistAuditors();}S.newAuditor='';render();}
-  else if(act==='auditorRemove'){ensureAuditors();S.rcaAuditors=S.rcaAuditors.filter(x=>x!==v);persistAuditors();render();}
+  else if(act==='accessFilter'){S.accessFilter=v;render();}
+  else if(act==='setTab'){S.setTab=v;S.mapErr='';S.mapMsg='';render();}
+  else if(act==='mapFilter'){S.mapFilter=v;render();}
+  else if(act==='mapClear'){saveMapping([{lrm_email:v,clear:true}]);}
+  else if(act==='unmapAll'){const l=S.unmapped||[],sel=S.mapSel||{},n=Object.keys(sel).filter(k=>sel[k]).length;
+    S.mapSel={};if(n!==l.length)l.forEach(u=>{const e=norm(u.lrm_email);if(e)S.mapSel[e]=true;});render();}
+  else if(act==='bulkAssign'){
+    const sel=S.mapSel||{},tl=S.mapBulkTl||'';
+    const ids=Object.keys(sel).filter(k=>sel[k]&&k.indexOf('@')>=0);
+    if(!tl||!ids.length)return;
+    const chain=chainFor(tl),src=(S.unmapped||[]);
+    saveMapping(ids.map(e=>{const u=src.find(x=>norm(x.lrm_email)===e)||{};
+      return Object.assign({lrm_email:e,lrm_name:u.lrm_name||'',cluster:u.cluster||''},chain);}));
+  }
+  else if(act==='accessAdd'){const e=(S.newAccessEmail||'').trim();if(e){saveAccess(e,S.newAccessRole||'auditor');S.newAccessEmail='';}}
 });
 document.addEventListener('change',e=>{const t=e.target.closest('[data-act]');if(!t)return;
   if(t.dataset.act==='reason'){patch(S.selId,{reason:t.value});if(t.value&&!(S.audits[S.selId]&&S.audits[S.selId].sev))patch(S.selId,{sev:'med'});render();}
   else if(t.dataset.act==='action'){patch(S.selId,{action:t.value});render();}
   else if(t.dataset.act==='rcaAssignee'){patchRv(t.dataset.v,{assignee:t.value,notified:false});render();}
+  else if(t.dataset.act==='mapTl'){
+    const e=t.dataset.v;
+    if(e.indexOf('@')<0){S.mapErr='That lead record carries no LRM email, so it cannot be mapped. Fix the email in the CRM first.';render();return;}
+    const u=(S.unmapped||[]).find(x=>norm(x.lrm_email)===e)||{};
+    saveMapping([Object.assign({lrm_email:e,lrm_name:u.lrm_name||'',cluster:u.cluster||''},chainFor(t.value))]);
+  }
+  else if(t.dataset.act==='bulkTl'){S.mapBulkTl=t.value;render();}
+  else if(t.dataset.act==='unmapSel'){S.mapSel=Object.assign({},S.mapSel,{[t.dataset.v]:t.checked});render();}
 });
 document.addEventListener('input',e=>{const t=e.target.closest('[data-act]');if(!t)return;
   if(t.dataset.act==='note'){S.audits[S.selId]=Object.assign({},S.audits[S.selId],{note:t.value});}
   else if(t.dataset.act==='rcaNote'){S.rcaReview[t.dataset.v]=Object.assign({verdict:null,assignee:'',notified:false},S.rcaReview[t.dataset.v],{note:t.value});}
   else if(t.dataset.act==='auditorInput'){S.newAuditor=t.value;}
   else if(t.dataset.act==='dirSearch'){S.dirQ=t.value;renderKeepFocus('[data-act="dirSearch"]');}
+  else if(t.dataset.act==='mapSearch'){S.mapQ=t.value;renderKeepFocus('[data-act="mapSearch"]');}
+  else if(t.dataset.act==='accessRole'){saveAccess(t.dataset.v,t.value);}
+  else if(t.dataset.act==='accessNewRole'){S.newAccessRole=t.value;}
+  else if(t.dataset.act==='accessNewEmail'){S.newAccessEmail=t.value;}
 });
-document.addEventListener('keydown',e=>{const t=e.target.closest&&e.target.closest('[data-act="auditorInput"]');if(t&&e.key==='Enter'){e.preventDefault();ensureAuditors();const em=(S.newAuditor||'').trim().toLowerCase();if(em&&!S.rcaAuditors.includes(em)){S.rcaAuditors=[...S.rcaAuditors,em];persistAuditors();}S.newAuditor='';render();}});
+document.addEventListener('keydown',e=>{const t=e.target.closest&&e.target.closest('[data-act="accessNewEmail"]');if(t&&e.key==='Enter'){e.preventDefault();const em=(t.value||'').trim();if(em)saveAccess(em,S.newAccessRole||'auditor');S.newAccessEmail='';}});
 
 setInterval(tickTimers,1000);
 setInterval(flushRca,20000);
