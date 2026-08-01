@@ -188,7 +188,7 @@ const ACTLBL={call:'Call logged',stage_change:'Stage changed',meeting_done:'Meet
 const LEAKLBL={L1:'Meeting date passed, nothing since',L2:'Marked CNC, never re-dialled',L3:'Call-later loop turning, no close',L4:'Closed with no connected call',L4b:'Closed \u2014 check the reason',L0:'Watch only'};const silentLbl=l=>{if(l.lastAt==null)return'never touched';const h=l.hoursSilent||0;if(h<24)return h<=1?'active this hour':h+'h silent';return (l.silent||Math.round(h/24))+'d silent';};
 const catObj=k=>CATS.find(c=>c.key===k);
 
-const S={screen:'queue',mtdLvl:'tl',actFilter:'open',actBusy:'',recs:{},recBusy:null,rcaLog:[],rcaPending:0,rcaErr:'',diag:null,diagState:'',access:null,accessBusy:'',accessErr:'',accessFilter:'all',newAccessEmail:'',newAccessRole:'auditor',
+const S={screen:'queue',mtdLvl:'tl',rcaRange:'today',rcaFilter:'pending',rcaTouched:{},actFilter:'open',actBusy:'',recs:{},recBusy:null,rcaLog:[],rcaPending:0,rcaErr:'',diag:null,diagState:'',access:null,accessBusy:'',accessErr:'',accessFilter:'all',newAccessEmail:'',newAccessRole:'auditor',
   setTab:'access',mapping:null,unmapped:[],mapBusy:'',mapErr:'',mapMsg:'',mapQ:'',mapFilter:'overridden',mapSel:{},mapBulkTl:'',auditRaw:'',auditDate:'',tlEmail:null,catKey:'mcch_past',selId:null,audits:{},rcaReview:{},showRules:false,model:null,src:'live',role:'tl',user:null,meEmail:null,hier:[],rcaAuditors:null,newAuditor:'',dirQ:''};
 
 const AUTH={enabled:true,ready:false,clientId:'',domain:'solarsquare.in',admins:[]};
@@ -341,6 +341,7 @@ function sampleData(role){
     // owner/fault so both new fields and the coachable-vs-system colouring are visible
     const act=ACTIONS[1+(i%(ACTIONS.length-1))];
     rcaLog.push({logged_at:iso(0),audit_date:today,lead_id:r.lead_id,category:r.category,
+      customer_name:r.customer_name||'',
       lrm_email:r.lrm_email,lrm_name:r.lrm_name,tl_email:h.tl_email||'',tl_name:h.tl_name||'',
       auditor_email:h.tl_email||'',auditor_name:h.tl_name||'',
       reason:pk.root,severity:'',
@@ -550,7 +551,7 @@ function rcaPayload(leadId){
   const a=S.audits[leadId]||{};if(!a.reason)return null;
   const w=r3Walk(l),path=[w.s1&&w.s1.t,w.s2&&w.s2.t,w.root].filter(Boolean).join(' → ');
   const h=(S.hier||[]).find(x=>norm(x.lrm_email)===norm(l.lrmEmail||''))||{};
-  return{audit_date:S.auditRaw||'',lead_id:leadId,category:l.cat,
+  return{audit_date:S.auditRaw||'',lead_id:leadId,customer_name:l.name||'',category:l.cat,
     lrm_email:l.lrmEmail||'',lrm_name:l.LRM||'',
     tl_email:l.tlEmail||h.tl_email||'',tl_name:l.tlName||h.tl_name||'',
     auditor_email:(S.user&&S.user.email)||'',auditor_name:(S.user&&S.user.name)||'',
@@ -1263,14 +1264,77 @@ function mtdView(){
     '</div>';
 }
 function assigneesFor(origTl){const names=[origTl];TLS().forEach(t=>{if(t.name&&names.indexOf(t.name)<0)names.push(t.name);});return names.filter(Boolean);}
+// Every RCA an auditor is entitled to see comes from the SHARED log, not from this
+// browser's drafts and not from whichever TL happens to be selected. Building this from
+// L() meant a TL's completed work was invisible to the auditor unless that exact TL was
+// the one currently picked — which is why "RCAs done by TL are not reflecting here".
 function rcaSubs(){
-  const live=L().filter(l=>rcaDone(l.id)).map(l=>{const x=S.audits[l.id];return{id:'live-'+l.id,lead:l.name,LRM:l.LRM,tl:myTlName(),cat:l.cat,rca:x.reason,action:x.action,fault:x.fault||'coachable',when:'just now',live:true};});
-  return live;
+  const sc=mtdScope(),lines=tlLines().line;
+  const inScope=function(te){
+    if(!sc)return true;const l=lines[te];if(!l)return false;
+    if(sc.role==='zsm')return l.zsm_email===sc.me;
+    if(sc.role==='ados')return l.ados_email===sc.me;
+    return true;};
+  // lead names live in the queue model, not in the log — index every TL's leads, and fall
+  // back to the lead id for anything already rotated out of today's queue
+  const names={};
+  if(S.model)Object.keys(S.model.leadsByTl).forEach(function(t){
+    (S.model.leadsByTl[t]||[]).forEach(function(l){names[l.id]=l.name;});});
+  const today=S.auditRaw||'';
+  return (S.rcaLog||[])
+    .filter(function(x){return x.lead_id&&x.reason&&inScope(norm(x.tl_email||''));})
+    .slice()
+    .sort(function(a,b){return String(b.audit_date||'').localeCompare(String(a.audit_date||''))
+                            ||String(b.logged_at||'').localeCompare(String(a.logged_at||''));})
+    .map(function(x){
+      const d=String(x.audit_date||'').slice(0,10);
+      return{id:d+'|'+x.lead_id,
+        lead:x.customer_name||names[x.lead_id]||x.lead_id,
+        leadId:x.lead_id,
+        LRM:x.lrm_name||x.lrm_email||'\u2014',
+        tl:x.tl_name||nameFromEmail(x.tl_email||'')||'Unassigned',
+        auditor:x.auditor_name||nameFromEmail(x.auditor_email||''),
+        cat:x.category,rca:x.reason,action:x.action||'',
+        mine:norm(x.auditor_email||'')===norm((S.user&&S.user.email)||S.meEmail||''),
+        owner:(OWNERS.find(function(o){return o[0]===x.owner;})||['','\u2014'])[1],
+        fault:x.fault||'coachable',
+        when:d===today?'today':fmtD(d),
+        live:d===today};
+    });
 }
+// The log runs 45 days and the whole org, and render() is a full innerHTML rebuild fired
+// on every Accept click — so this list must be BOUNDED, not just sorted. Default scope is
+// what the auditor is actually here to do: today's pending reviews.
+const RCA_SHOW=100;
 function rcaView(){
-  const subs=rcaSubs();
+  const all=rcaSubs();
   const rv=id=>S.rcaReview[id]||{};
-  const total=subs.length,acc=subs.filter(s=>rv(s.id).verdict==='accept').length,rew=subs.filter(s=>rv(s.id).verdict==='rework').length,pend=total-acc-rew;
+  const today=S.auditRaw||'';
+  // Anchor the arithmetic at midday UTC: `new Date('2026-08-01T00:00:00')` parses as LOCAL
+  // midnight, and slicing the UTC ISO string back off it shifts the boundary a day in IST,
+  // which made "Last 7 days" quietly span 8.
+  const wkCut=(function(){const t=Date.parse(today+'T12:00:00Z');
+    return isNaN(t)?'':new Date(t-6*86400000).toISOString().slice(0,10);})();
+  const range=S.rcaRange||'today', vfilt=S.rcaFilter||'pending';
+  const inRange=s=>{const d=String(s.id).slice(0,10);
+    return range==='all'||(range==='today'?d===today:(!wkCut||d>=wkCut));};
+  const scoped=all.filter(inRange);
+  const verdictOf=s=>rv(s.id).verdict||'pending';
+  const total=scoped.length,
+    acc=scoped.filter(s=>verdictOf(s)==='accept').length,
+    rew=scoped.filter(s=>verdictOf(s)==='rework').length,
+    pend=total-acc-rew;
+  // A card reviewed just now stays in the pending list until the auditor changes scope:
+  // the note, reassign and notify controls only render once a verdict exists, so evicting
+  // the card on click would make the whole rework-routing flow unreachable.
+  const touched=S.rcaTouched||{};
+  const matching=scoped.filter(s=>vfilt==='all'||verdictOf(s)===vfilt||(vfilt==='pending'&&touched[s.id]));
+  const subs=matching.slice(0,RCA_SHOW);
+  const hidden=matching.length-subs.length;
+  const rBtn=(k,l,n)=>{const on=range===k;
+    return `<button data-act="rcaRange" data-v="${k}" style="background:none;border:none;padding:0 0 3px;cursor:pointer;font-family:inherit;font-size:13px;color:${on?'var(--color-text)':MUT(48)};font-weight:${on?'600':'400'};border-bottom:1.5px solid ${on?'var(--color-text)':'transparent'}">${l}${n==null?'':' <span style="color:'+MUT(38)+'">'+n+'</span>'}</button>`;};
+  const fBtn=(k,l,n)=>{const on=vfilt===k;
+    return `<button data-act="rcaFilter" data-v="${k}" style="background:none;border:none;padding:0 0 3px;cursor:pointer;font-family:inherit;font-size:13px;color:${on?'var(--color-text)':MUT(48)};font-weight:${on?'600':'400'};border-bottom:1.5px solid ${on?'var(--color-text)':'transparent'}">${l} <span style="color:${MUT(38)}">${n}</span></button>`;};
   const cards=subs.map(s=>{const r=rv(s.id),v=r.verdict,c=catObj(s.cat),sm=FAULTMETA[s.fault]||FAULTMETA.coachable;
     const catcls='tag '+(s.cat==='mcch_past'||s.cat==='mcch_future'?'tag-accent-2':'tag-accent');
     const accStyle='padding:8px 14px;font-size:13px;border:1.5px solid '+(v==='accept'?'var(--color-accent-2);background:var(--color-accent-2-100);color:var(--color-accent-2-800)':MUT(16)+';color:'+MUT(78));
@@ -1288,9 +1352,9 @@ function rcaView(){
     }
     return `<div class="card elev-sm" style="padding:20px 22px;gap:14px;${wrap}">
       <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px">
-        <div style="display:flex;align-items:center;gap:12px"><span style="width:40px;height:40px;flex:none;display:grid;place-items:center;border-radius:999px;background:var(--color-accent-200);color:var(--color-accent-800);font-size:13px;font-weight:700">${esc(ini2(s.LRM))}</span><div style="line-height:1.3"><div style="font-weight:600;font-size:15px">${esc(s.lead)}${s.live?` <span style="font-size:10px;font-weight:700;color:var(--color-accent);margin-left:4px">· yours</span>`:''}</div><div style="font-size:12px;color:${MUT(55)}">${esc(s.LRM)} · TL ${esc(s.tl)} · ${esc(s.when)}</div></div></div>
+        <div style="display:flex;align-items:center;gap:12px"><span style="width:40px;height:40px;flex:none;display:grid;place-items:center;border-radius:999px;background:var(--color-accent-200);color:var(--color-accent-800);font-size:13px;font-weight:700">${esc(ini2(s.LRM))}</span><div style="line-height:1.3"><div style="font-weight:600;font-size:15px">${esc(s.lead)}${s.mine?` <span style="font-size:10px;font-weight:700;color:var(--color-accent);margin-left:4px">· yours</span>`:''}</div><div style="font-size:12px;color:${MUT(55)}">${esc(s.LRM)} · TL ${esc(s.tl)} · ${esc(s.when)}</div></div></div>
         <div style="display:flex;gap:8px;align-items:center;flex:none"><span class="${catcls}">${esc(c?c.name:s.cat)}</span><span style="font-size:10px;font-weight:700;padding:2px 9px;border-radius:999px;white-space:nowrap;${sm[1]}">${sm[0]}</span></div></div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;background:var(--color-bg);border:1px solid var(--color-divider);border-radius:14px;padding:14px 16px"><div><div style="font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:${MUT(50)};margin-bottom:4px">Root cause logged</div><div style="font-size:13.5px">${esc(s.rca)}</div></div><div><div style="font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:${MUT(50)};margin-bottom:4px">Corrective action</div><div style="font-size:13.5px">${esc(s.action)}</div></div></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;background:var(--color-bg);border:1px solid var(--color-divider);border-radius:14px;padding:14px 16px"><div><div style="font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:${MUT(50)};margin-bottom:4px">Root cause logged</div><div style="font-size:13.5px">${esc(s.rca)}</div></div><div><div style="font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:${MUT(50)};margin-bottom:4px">Action · owner</div><div style="font-size:13.5px">${esc(s.action)}</div><div style="font-size:12px;color:${MUT(50)};margin-top:3px">${esc(s.owner||'—')}</div></div></div>
       <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;border-top:1px solid var(--color-divider);padding-top:14px"><span style="font-size:13px;font-weight:600">Is this RCA done correctly?</span><button class="btn" data-act="rcaAccept" data-v="${s.id}" style="${accStyle}"><span style="margin-right:6px">✓</span>Accept RCA</button><button class="btn" data-act="rcaRework" data-v="${s.id}" style="${rewStyle}"><span style="margin-right:6px">↺</span>Needs rework</button><span style="flex:1"></span><span class="${statl[1]}">${statl[0]}</span></div>
       ${noteBlock}</div>`;}).join('');
   return `<div class="wrap" style="max-width:1100px;padding-bottom:44px;animation:lsfade .25s ease">
@@ -1298,7 +1362,14 @@ function rcaView(){
       <div><h2 style="margin:0;font-size:30px">RCA audit</h2><div style="font-size:13.5px;color:${MUT(60)}">Review the root-cause analyses TLs logged against breached leads — accept, or send back for rework.</div></div>
       <div style="display:flex;gap:18px"><div style="text-align:right"><div style="font-family:var(--font-heading);font-size:24px">${total}</div><div style="font-size:11px;color:${MUT(55)}">submitted</div></div><div style="text-align:right"><div style="font-family:var(--font-heading);font-size:24px;color:var(--color-accent-2-700)">${acc}</div><div style="font-size:11px;color:${MUT(55)}">accepted</div></div><div style="text-align:right"><div style="font-family:var(--font-heading);font-size:24px;color:var(--color-accent-700)">${rew}</div><div style="font-size:11px;color:${MUT(55)}">rework</div></div><div style="text-align:right"><div style="font-family:var(--font-heading);font-size:24px">${pend}</div><div style="font-size:11px;color:${MUT(55)}">pending</div></div></div>
     </div>
-    <div style="display:flex;flex-direction:column;gap:14px">${cards}</div></div>`;
+    <div style="display:flex;align-items:baseline;gap:22px;flex-wrap:wrap;padding-bottom:16px">
+      ${rBtn('today','Today')}${rBtn('week','Last 7 days')}${rBtn('all','All '+all.length)}
+      <span style="width:1px;height:14px;background:${MUT(18)}"></span>
+      ${fBtn('pending','Pending',pend)}${fBtn('accept','Accepted',acc)}${fBtn('rework','Rework',rew)}${fBtn('all','All',total)}
+    </div>
+    <div style="display:flex;flex-direction:column;gap:14px">${cards||`<div style="font-size:14px;color:${MUT(50)};padding:8px 0">Nothing ${vfilt==='pending'?'awaiting review':esc(vfilt)} in this range.</div>`}</div>
+    ${hidden>0?`<div style="font-size:12.5px;color:${MUT(45)};padding-top:16px">Showing the first ${RCA_SHOW} of ${matching.length}. Narrow the range${S.role==='admin'?', or export the full log from MTD score':''}.</div>`:''}
+  </div>`;
 }
 // ---- access control (shared, server-side) ----
 // Overrides live in the Access_Overrides tab via /api/access, so a change by one admin is
@@ -1679,8 +1750,10 @@ document.addEventListener('click',e=>{
   else if(act==='reopen'){patch(S.selId,{submitted:false});render();}
   else if(act==='prev'){const dl=catLeads(S.catKey),i=dl.findIndex(x=>x.id===S.selId);S.selId=dl[(i-1+dl.length)%dl.length].id;render();}
   else if(act==='next'){const dl=catLeads(S.catKey),i=dl.findIndex(x=>x.id===S.selId);for(let k=1;k<=dl.length;k++){const j=(i+k)%dl.length;if(!rcaDone(dl[j].id)){S.selId=dl[j].id;render();return;}}S.selId=dl[(i+1)%dl.length].id;render();}
-  else if(act==='rcaAccept'){const cur=S.rcaReview[v]||{};patchRv(v,{verdict:cur.verdict==='accept'?null:'accept'});render();}
-  else if(act==='rcaRework'){const cur=S.rcaReview[v]||{};patchRv(v,{verdict:cur.verdict==='rework'?null:'rework'});render();}
+  else if(act==='rcaRange'){S.rcaRange=v;S.rcaTouched={};render();}
+  else if(act==='rcaFilter'){S.rcaFilter=v;S.rcaTouched={};render();}
+  else if(act==='rcaAccept'){const cur=S.rcaReview[v]||{};S.rcaTouched=Object.assign({},S.rcaTouched,{[v]:true});patchRv(v,{verdict:cur.verdict==='accept'?null:'accept'});render();}
+  else if(act==='rcaRework'){const cur=S.rcaReview[v]||{};S.rcaTouched=Object.assign({},S.rcaTouched,{[v]:true});patchRv(v,{verdict:cur.verdict==='rework'?null:'rework'});render();}
   else if(act==='rcaNotify'){patchRv(v,{notified:true});render();}
   else if(act==='accessFilter'){S.accessFilter=v;render();}
   else if(act==='setTab'){S.setTab=v;S.mapErr='';S.mapMsg='';render();}
