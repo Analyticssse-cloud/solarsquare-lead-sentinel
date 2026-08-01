@@ -78,90 +78,97 @@ const CATS=[
   check:'Meeting (MCCH) is confirmed for a future date but the slot is outside the D+2 window, the customer confirmation is missing, or prep was not done.',
   reasons:['Customer confirmation not logged','Slot beyond D+2 window','No prep note sent to customer','Held / duplicate slot']},
 ];
-const ACTIONS=['No action needed','Re-open the lead','Reassign to another LRM','Ask LRM to call today','Escalate to manager'];
+const DAILY_PER_CAT=3, DAILY_CAP=15;
+const ACTIONS=['No action needed','LRM to call the customer today','LRM to set a fresh follow-up date',
+ 'LRM to correct the CRM record','LRM to re-attempt the meeting','Re-open the lead',
+ 'Reassign to another LRM','TL to coach the LRM','Escalate to ADOS'];
+// Every action needs a name against it, and a verdict on whether this is a person problem
+// or a system one \u2014 the two things the old form could not say.
+const OWNERS=[['lrm','The LRM'],['tl','The TL'],['ados','ADOS'],['ops','Ops / system']];
+const FAULTS=[['coachable','Coachable \u2014 behaviour or skill'],['system','System issue \u2014 process or tooling']];
+const FAULTMETA={coachable:['Coachable','background:var(--color-accent-100);color:var(--color-accent-800)'],
+ system:['System','background:var(--color-accent-2-100);color:var(--color-accent-2-800)']};
 const SEVS=[['low','Low'],['med','Medium'],['high','High']];
 const SEVMETA={low:['Low sev','background:var(--color-accent-2-100);color:var(--color-accent-2-800)'],med:['Med sev','background:var(--color-accent-100);color:var(--color-accent-800)'],high:['High sev','background:var(--color-accent-200);color:var(--color-accent-800)']};
 const RULES=[
  ['1','Pool','Every lead where a breach condition fired in the last 30 days, up to today.'],
  ['2','Eligibility','Category rule applied, minus anything RCA-ed in the last 7 days — a cooldown so leads keep rotating.'],
- ['3','Severity score','60% breach urgency + 40% LRM deviation risk → P1 / P2 / P3.'],
- ['4','Daily pick','Top 4 per category, LRM-balanced and seeded to the date so the pull is reproducible.'],
+ ['3','Priority','Breach age weighted 10×, days of silence as the tiebreaker (capped at 60).'],
+ ['4','Daily pick','Top 3 per category — 15 a day per TL, LRM-balanced and seeded to the date so the pull is reproducible.'],
 ];
 const MTD=null; // month-to-date adherence needs a shared RCA history store; never fake it
-// 5-Why decision trees. WHYS[cat](lead) returns the opening node; every option either
-// branches to a follow-up node (`to`) or terminates at a root cause (`root`).
-const WHYS={
-  mcch_past:l=>{const d=l.days||0;return{
-    q:'This meeting was due '+(d?d+' day'+(d===1?'':'s')+' ago':'earlier')+' and the lead is still at MCCH. Why has it not moved to MD?',
-    a:[
-      {t:'The meeting never took place',to:{q:'Why did the confirmed meeting not happen?',a:[
-        {t:'Customer no-showed',to:{q:'Why has it not been rescheduled since the no-show?',a:[
-          {t:'LRM made no attempt to reconnect',to:{q:'Why did the LRM not attempt a reschedule?',a:[
-            {t:'Lead deprioritised vs newer leads',root:'Reschedule deprioritised — LRM prioritisation gap'},
-            {t:'No task/reminder surfaced it',root:'No system reminder to reschedule after no-show'}]}},
-          {t:'Customer stopped responding',root:'Customer unresponsive after no-show — no win-back cadence'}]}},
-        {t:'LRM missed / double-booked the slot',root:'LRM missed the confirmed meeting slot'},
-        {t:'It was never a genuine confirmation',root:'MCCH marked without real customer confirmation'}]}},
-      {t:'The meeting happened but stage was not updated',to:{q:'Why was the stage not moved to MD after the meeting?',a:[
-        {t:'LRM forgot / deprioritised the update',to:{q:'Why was the stage update missed?',a:[
-          {t:'No end-of-meeting update habit',root:'Meeting done, stage not updated — process discipline'},
-          {t:'Unsure which stage applied',root:'Outcome logged incorrectly — stage-knowledge gap'}]}},
-        {t:'Outcome unclear, LRM is waiting',root:'Ambiguous outcome — lead parked at MCCH'}]}},
-      {t:'Customer postponed the meeting',to:{q:'Why was a fresh meeting date not captured?',a:[
-        {t:'No new date taken at postponement',root:'Postponed with no fresh MCCH date set'},
-        {t:'Customer went cold after postponing',root:'Postponed then unresponsive — no follow-up cadence'}]}}]};},
-  followup_missed:l=>{const d=l.days||0;return{
-    q:d>0?('The follow-up is '+d+' day'+(d===1?'':'s')+' overdue with no attempt logged. Why was it not made?'):'The follow-up is due today and no attempt is logged yet. Why has the LRM not connected?',
-    a:[
-      {t:'LRM made no attempt to contact',to:{q:'Why was no attempt made?',a:[
-        {t:'Lead slipped out of the day plan',to:{q:'Why did it slip out of the plan?',a:[
-          {t:'No task/reminder surfaced it',root:'No reminder surfaced the due follow-up'},
-          {t:'Too many leads, ran out of time',root:'LRM capacity exceeded — follow-up not reached'}]}},
-        {t:'LRM chose to prioritise other leads',root:'Follow-up deprioritised vs other leads'}]}},
-      {t:'LRM tried but could not reach the customer',to:{q:'Why was the attempt not logged or a new date not set?',a:[
-        {t:'Attempt made but not logged in CRM',root:'Contact attempted but not logged (data gap)'},
-        {t:'Reached, but no new follow-up date set',root:'No fresh follow-up date set after contact'}]}},
-      {t:'The follow-up date was stale / wrong',to:{q:'Why was the follow-up date not honoured?',a:[
-        {t:'Date set by default, no real commitment',root:'Follow-up date set without real commitment'},
-        {t:'Reassigned LRM never picked it up',root:'Reassigned lead not actioned by new LRM'}]}}]};},
-  not_interested:l=>({
-    q:l.sit==='met'?'This lead was marked Not Interested after a meeting was confirmed. Why was it closed as NI?':'This lead was marked Not Interested before any meeting (MD). Why was it closed this early?',
-    a:[
-      {t:'The real objection was not handled',to:{q:'Why was the objection not handled?',a:[
-        {t:'Objection was not captured / logged',to:{q:'Why was the objection not captured?',a:[
-          {t:'LRM did not probe the reason',root:'Objection not probed — discovery gap'},
-          {t:'Captured verbally, never logged',root:'Objection handled but not logged (data gap)'}]}},
-        {t:'LRM had no rebuttal / offer',root:'Objection known but no rebuttal attempted'}]}},
-      {t:'Closed too early — before a real pitch',to:{q:'Why was it closed before MD?',a:[
-        {t:'LRM judged low intent quickly',root:'Premature close — intent misjudged, no MD'},
-        {t:'Pressure to clear the pipeline',root:'Pipeline-hygiene pressure — closed prematurely'}]}},
-      {t:'Genuinely not interested, but no win-back',to:{q:'Why was there no win-back attempt?',a:[
-        {t:'No win-back cadence exists',root:'Valid NI but no win-back attempt'},
-        {t:'Marked lost and dropped immediately',root:'Closed and dropped — no nurture path'}]}}]}),
-  not_qualified:l=>({
-    q:l.sit==='disc'?'This lead was marked Not Qualified after a discovery call. Why does it not qualify?':'This lead was marked Not Qualified with no discovery call logged. Why was it disqualified without discovery?',
-    a:[
-      {t:'No discovery call actually happened',to:{q:'Why was there no discovery call?',a:[
-        {t:'LRM disqualified on assumption',root:'Disqualified on assumption — no discovery call'},
-        {t:'Could not reach customer to qualify',to:{q:'Why was reaching the customer not retried?',a:[
-          {t:'No retry cadence attempted',root:'Unreachable for discovery — no retry cadence'},
-          {t:'Wrong / bad contact details',root:'Bad contact data — could not qualify'}]}}]}},
-      {t:'The DQ criteria do not really apply',to:{q:'Why were the criteria mis-applied?',a:[
-        {t:'Criteria misunderstood by LRM',root:'DQ criteria misunderstood — training gap'},
-        {t:'Reason code missing / wrong',root:'DQ reason code missing or incorrect'}]}},
-      {t:'It qualifies but was closed anyway',root:'Reopen candidate — lead actually qualifies'}]}),
-  mcch_future:l=>({
-    q:'A meeting is confirmed for an upcoming date but the entry is flagged. Why is this MCCH not clean?',
-    a:[
-      {t:'Customer confirmation is not logged',to:{q:'Why is the confirmation missing?',a:[
-        {t:'LRM set MCCH without customer OK',root:'MCCH set without customer confirmation'},
-        {t:'Confirmed verbally, not recorded',root:'Customer confirmed but not logged (data gap)'}]}},
-      {t:'The slot is beyond the D+2 window',to:{q:'Why was the slot booked so far out?',a:[
-        {t:'Customer only available later',root:'Slot beyond D+2 — customer availability'},
-        {t:'LRM pushed the slot to manage load',root:'Slot beyond D+2 — LRM scheduling to ease load'}]}},
-      {t:'Prep note was not sent',to:{q:'Why was prep not done?',a:[
-        {t:'No prep step in the LRM routine',root:'No meeting-prep note sent to customer'},
-        {t:'Held / duplicate slot',root:'Held or duplicate slot — needs cleanup'}]}}]}),
+// ---- RCA: three fixed steps, every category ----
+// What happened -> Why -> Root cause. Always exactly three clicks, so two audits are
+// always comparable. The vocabulary is category-specific on purpose: a follow-up leak and
+// a disqualification do not share language, and forcing one taxonomy on both is what made
+// the old branching tree unreportable.
+const RCA3={
+ mcch_past:{q:['What happened with this meeting?','Why did that happen?','Which root cause fits best?'],w:[
+  {t:'The meeting never took place',y:[
+    {t:'Customer did not turn up or was unavailable',r:['No-show \u2014 no reconfirmation call before the slot','No-show \u2014 customer never genuinely committed','No-show \u2014 wrong address or slot communicated']},
+    {t:'LRM did not reach the customer or the site',r:['LRM missed the slot \u2014 day plan overloaded','LRM missed the slot \u2014 double-booked','LRM missed the slot \u2014 travel or coverage gap']},
+    {t:'The slot was never a real appointment',r:['MCCH marked without customer agreement','Slot entered to hold the stage']}]},
+  {t:'The meeting happened but the stage never moved',y:[
+    {t:'LRM did not update the CRM after the meeting',r:['Meeting done, stage not updated \u2014 process discipline','Outcome logged against the wrong stage']},
+    {t:'LRM is waiting on the customer before updating',r:['Ambiguous outcome \u2014 lead parked at MCCH','Waiting on customer with no next date set']}]},
+  {t:'The customer postponed it',y:[
+    {t:'No fresh date was captured at the postponement',r:['Postponed with no new MCCH date','Postponed, follow-up left open-ended']},
+    {t:'Customer went silent after postponing',r:['Postponed then unresponsive \u2014 no win-back cadence']}]},
+  {t:'Nothing was attempted after the date lapsed',y:[
+    {t:'Nothing surfaced the lapsed meeting to the LRM',r:['No reminder after the MCCH date lapsed']},
+    {t:'LRM deprioritised it against newer leads',r:['Lapsed MCCH deprioritised vs newer leads']}]}]},
+ followup_missed:{q:['What happened on the due date?','Why did that happen?','Which root cause fits best?'],w:[
+  {t:'No attempt was made at all',y:[
+    {t:'It fell out of the day plan',r:['No reminder surfaced the due follow-up','LRM capacity exceeded \u2014 never reached']},
+    {t:'LRM chose to work other leads first',r:['Follow-up deprioritised vs other leads']},
+    {t:'The lead was reassigned and never picked up',r:['Reassigned lead not actioned by the new LRM']}]},
+  {t:'An attempt was made but did not connect',y:[
+    {t:'No retry after the failed attempt',r:['Single attempt, no retry cadence','Retried on the same unreachable number']},
+    {t:'Contact details are wrong or missing',r:['Bad or missing contact data']}]},
+  {t:'The customer was reached but nothing moved',y:[
+    {t:'No new follow-up date was committed',r:['Connected, no next date committed']},
+    {t:'Customer is stalling or non-committal',r:['Customer stalling \u2014 no qualifying push','Objection surfaced but not handled']}]},
+  {t:'It was worked but never logged',y:[
+    {t:'LRM did not update the CRM',r:['Contact attempted but not logged \u2014 data gap']},
+    {t:'Call was placed outside the dialler',r:['Called from a personal number \u2014 no call record']}]}]},
+ not_interested:{q:['What happened at the close?','Why did that happen?','Which root cause fits best?'],w:[
+  {t:'Closed before any real pitch',y:[
+    {t:'LRM judged the intent too quickly',r:['Premature close \u2014 intent misjudged, no MD']},
+    {t:'Pressure to keep the pipeline clean',r:['Pipeline-hygiene pressure \u2014 closed prematurely']}]},
+  {t:'An objection was raised and not handled',y:[
+    {t:'LRM had no rebuttal or offer to put',r:['Objection known, no rebuttal attempted','Pricing objection, no offer positioned']},
+    {t:'LRM never probed the real reason',r:['Objection not probed \u2014 discovery gap']}]},
+  {t:'The reason was never captured',y:[
+    {t:'Handled verbally, never written down',r:['Objection handled but not logged \u2014 data gap']},
+    {t:'Reason code left blank or generic',r:['NI reason code missing or generic']}]},
+  {t:'Genuinely not interested, but dropped cold',y:[
+    {t:'No win-back or nurture path was tried',r:['Valid NI, no win-back attempt','Closed and dropped \u2014 no nurture path']}]}]},
+ not_qualified:{q:['What happened at the disqualification?','Why did that happen?','Which root cause fits best?'],w:[
+  {t:'Disqualified with no discovery call',y:[
+    {t:'LRM decided on assumption',r:['Disqualified on assumption \u2014 no discovery']},
+    {t:'Customer could not be reached to qualify',r:['Unreachable for discovery \u2014 no retry cadence','Bad contact data \u2014 could not qualify']}]},
+  {t:'Discovery happened but the criteria do not apply',y:[
+    {t:'LRM misread the qualification criteria',r:['DQ criteria misunderstood \u2014 training gap']},
+    {t:'Reason code is wrong or missing',r:['DQ reason code missing or incorrect']}]},
+  {t:'It genuinely does not qualify',y:[
+    {t:'The disqualifier is real and documented',r:['Valid DQ \u2014 correctly closed']},
+    {t:'The disqualifier was findable much earlier',r:['Valid DQ but caught late \u2014 wasted LRM effort']}]},
+  {t:'It qualifies but was closed anyway',y:[
+    {t:'Closed to clear the working queue',r:['Reopen candidate \u2014 lead actually qualifies']},
+    {t:'The wrong record was closed',r:['Wrong record closed \u2014 CRM handling error']}]}]},
+ mcch_future:{q:['What is wrong with this upcoming meeting?','Why is it that way?','Which root cause fits best?'],w:[
+  {t:'Customer confirmation is not on record',y:[
+    {t:'LRM set the date without the customer agreeing',r:['MCCH set without customer confirmation']},
+    {t:'Confirmed verbally, never logged',r:['Customer confirmed but not logged \u2014 data gap']}]},
+  {t:'The slot sits outside the D+2 window',y:[
+    {t:'Customer is only available later',r:['Slot beyond D+2 \u2014 customer availability']},
+    {t:'LRM pushed it out to manage their load',r:['Slot beyond D+2 \u2014 LRM scheduling to ease load']}]},
+  {t:'No preparation has been done',y:[
+    {t:'No prep step exists in the LRM routine',r:['No meeting-prep note sent to customer']},
+    {t:'Site or requirement details are missing',r:['Meeting booked with incomplete site details']}]},
+  {t:'The slot looks held or duplicated',y:[
+    {t:'Placeholder booked to hold the stage',r:['Placeholder MCCH \u2014 stage held artificially']},
+    {t:'Duplicate lead or duplicate booking',r:['Duplicate slot \u2014 needs cleanup']}]}]},
 };
 const DEFAULT_AUDITORS=['quality.desk@solarsquare.in'];
 const ADMIN_FALLBACK=['analytics.sse@solarsquare.in'];
@@ -181,7 +188,7 @@ const ACTLBL={call:'Call logged',stage_change:'Stage changed',meeting_done:'Meet
 const LEAKLBL={L1:'Meeting date passed, nothing since',L2:'Marked CNC, never re-dialled',L3:'Call-later loop turning, no close',L4:'Closed with no connected call',L4b:'Closed \u2014 check the reason',L0:'Watch only'};const silentLbl=l=>{if(l.lastAt==null)return'never touched';const h=l.hoursSilent||0;if(h<24)return h<=1?'active this hour':h+'h silent';return (l.silent||Math.round(h/24))+'d silent';};
 const catObj=k=>CATS.find(c=>c.key===k);
 
-const S={screen:'queue',recs:{},recBusy:null,rcaLog:[],rcaPending:0,rcaErr:'',diag:null,diagState:'',access:null,accessBusy:'',accessErr:'',accessFilter:'all',newAccessEmail:'',newAccessRole:'auditor',
+const S={screen:'queue',mtdLvl:'tl',actFilter:'open',actBusy:'',recs:{},recBusy:null,rcaLog:[],rcaPending:0,rcaErr:'',diag:null,diagState:'',access:null,accessBusy:'',accessErr:'',accessFilter:'all',newAccessEmail:'',newAccessRole:'auditor',
   setTab:'access',mapping:null,unmapped:[],mapBusy:'',mapErr:'',mapMsg:'',mapQ:'',mapFilter:'overridden',mapSel:{},mapBulkTl:'',auditRaw:'',auditDate:'',tlEmail:null,catKey:'mcch_past',selId:null,audits:{},rcaReview:{},showRules:false,model:null,src:'live',role:'tl',user:null,meEmail:null,hier:[],rcaAuditors:null,newAuditor:'',dirQ:''};
 
 const AUTH={enabled:true,ready:false,clientId:'',domain:'solarsquare.in',admins:[]};
@@ -413,14 +420,14 @@ function buildModel(queue,hier){
     (leadsByTl[tl]=leadsByTl[tl]||[]).push(lead);
     tlMeta[tl]=tlMeta[tl]||{name:h.tl_name||'Unassigned',ini:ini2(h.tl_name||'NA'),cluster:h.cluster||row.cluster};
   });
-  // Daily pick, per TL: 4 per category pooled across ALL of that TL's LRMs, then top up to
-  // 20 from the leftovers (most overdue first) if any category came up short.
+  // Daily pick, per TL: 3 per category pooled across ALL of that TL's LRMs, then top up to
+  // 15 from the leftovers (most overdue first) if any category came up short.
   Object.keys(leadsByTl).forEach(tl=>{
     const byCat={};leadsByTl[tl].forEach(l=>(byCat[l.cat]=byCat[l.cat]||[]).push(l));
     const rank=(a,b)=>(b.key-a.key)||(b.urg-a.urg)||(b.days-a.days);
     let keep=[],rest=[];
-    CATS.forEach(c=>{const pool=(byCat[c.key]||[]).slice().sort(rank);keep=keep.concat(pool.slice(0,4));rest=rest.concat(pool.slice(4));});
-    if(keep.length<20)rest.sort((a,b)=>(b.days-a.days)||rank(a,b)).slice(0,20-keep.length).forEach(l=>keep.push({...l,slot:'backfill'}));
+    CATS.forEach(c=>{const pool=(byCat[c.key]||[]).slice().sort(rank);keep=keep.concat(pool.slice(0,DAILY_PER_CAT));rest=rest.concat(pool.slice(DAILY_PER_CAT));});
+    if(keep.length<DAILY_CAP)rest.sort((a,b)=>(b.days-a.days)||rank(a,b)).slice(0,DAILY_CAP-keep.length).forEach(l=>keep.push({...l,slot:'backfill'}));
     leadsByTl[tl]=keep;
   });
   const lrmsByTl={},lrmRiskByTl={};
@@ -506,13 +513,15 @@ function rcaKey(r){return String(r.audit_date||'')+'|'+String(r.lead_id||'');}
 function rcaPayload(leadId){
   const l=L().find(x=>x.id===leadId);if(!l)return null;
   const a=S.audits[leadId]||{};if(!a.reason)return null;
-  const w=whyWalk(l),path=w.steps.map(s=>s.opt.t||s.opt.label||'').filter(Boolean).join(' → ');
+  const w=r3Walk(l),path=[w.s1&&w.s1.t,w.s2&&w.s2.t,w.root].filter(Boolean).join(' → ');
   const h=(S.hier||[]).find(x=>norm(x.lrm_email)===norm(l.lrmEmail||''))||{};
   return{audit_date:S.auditRaw||'',lead_id:leadId,category:l.cat,
     lrm_email:l.lrmEmail||'',lrm_name:l.LRM||'',
     tl_email:l.tlEmail||h.tl_email||'',tl_name:l.tlName||h.tl_name||'',
     auditor_email:(S.user&&S.user.email)||'',auditor_name:(S.user&&S.user.name)||'',
-    reason:a.reason,severity:a.sev||'',action:a.action||'',note:a.note||'',why_path:path,assignee:''};
+    reason:a.reason,severity:a.sev||'',action:a.action||'',note:a.note||'',why_path:path,assignee:'',
+    what:(w.s1&&w.s1.t)||'',why:(w.s2&&w.s2.t)||'',owner:a.owner||'',fault:a.fault||'',
+    action_status:a.action==='No action needed'?'n/a':(a.action_status||'open')};
 }
 function queueRca(leadId){
   if(SAMPLE)return;
@@ -542,7 +551,7 @@ async function loadRcaLog(){
     // rehydrate my own RCAs for today so a reload doesn't look like unfinished work
     const today=S.auditRaw||'';
     S.rcaLog.forEach(x=>{if(String(x.audit_date||'')===today&&x.lead_id&&!S.audits[x.lead_id])
-      S.audits[x.lead_id]={reason:x.reason||'',sev:x.severity||'',note:x.note||'',action:x.action||'No action needed',submitted:true,at:''};});
+      S.audits[x.lead_id]={reason:x.reason||'',sev:x.severity||'',note:x.note||'',action:x.action||'No action needed',owner:x.owner||'lrm',fault:x.fault||'coachable',submitted:true,at:''};});
     render();
   }catch(e){}
 }
@@ -556,6 +565,140 @@ function mtdStats(){
   return{logged:mine.length,days:days.size,month:mon};
 }
 
+// ---- month-to-date scoreboard ----
+// Built entirely off the shared RCA log and the reporting lines. Nothing here is
+// estimated: "expected" is the daily cap times the number of days the queue actually ran
+// this month, so a month with three issued days is not scored against a full month.
+// Closing an action re-posts the whole RCA row with action_status=done. The log keeps the
+// LATEST row per (audit_date, lead_id), so an append is an update — no edit path needed.
+async function setActionStatus(auditDate,leadId,status){
+  const src=(S.rcaLog||[]).find(function(x){
+    return String(x.audit_date||'').slice(0,10)===auditDate&&String(x.lead_id)===String(leadId);});
+  if(!src)return;
+  const next=Object.assign({},src,{action_status:status});
+  S.rcaLog=(S.rcaLog||[]).map(function(x){return x===src?next:x;});
+  S.actBusy=auditDate+'|'+leadId;render();
+  try{
+    await fetch('/api/rca',{method:'POST',headers:Object.assign({'Content-Type':'application/json'},authHeaders()),
+      body:JSON.stringify({items:[next]})});
+  }catch(e){S.rcaErr='offline';}
+  S.actBusy='';render();
+}
+function mtdMonth(){return (S.auditRaw||new Date().toISOString().slice(0,10)).slice(0,7);}
+function tlLines(){
+  const line={},under={ados:{},zsm:{}};
+  (S.hier||[]).forEach(function(x){
+    if(!x.tl_email)return;const te=norm(x.tl_email);
+    if(!line[te])line[te]={tl:x.tl_name||nameFromEmail(x.tl_email),cluster:x.cluster||'',
+      ados_email:norm(x.ados_email||''),ados:x.ados_name||nameFromEmail(x.ados_email||'')||'Unmapped',
+      zsm_email:norm(x.zsm_email||''),zsm:x.zsm_name||nameFromEmail(x.zsm_email||'')||'Unmapped'};
+    if(x.ados_email){const k=norm(x.ados_email);(under.ados[k]=under.ados[k]||new Set()).add(te);}
+    if(x.zsm_email){const k=norm(x.zsm_email);(under.zsm[k]=under.zsm[k]||new Set()).add(te);}
+  });
+  return{line:line,under:under};
+}
+// A ZSM sees their own zone, an ADOS their own region, admin sees everything.
+function mtdScope(){
+  const me=norm((S.user&&S.user.email)||S.meEmail||'');
+  if(S.role==='admin'||S.role==='auditor')return null;
+  return{role:S.role,me:me};
+}
+function mtdBoard(level){
+  const mon=mtdMonth(),L=tlLines(),sc=mtdScope();
+  const inScope=function(te){
+    if(!sc)return true;const l=L.line[te];if(!l)return false;
+    if(sc.role==='zsm')return l.zsm_email===sc.me;
+    if(sc.role==='ados')return l.ados_email===sc.me;
+    return true;};
+  const rows=(S.rcaLog||[]).filter(function(x){
+    return String(x.audit_date||'').slice(0,7)===mon&&inScope(norm(x.tl_email||''));});
+  const issuedDays=new Set((S.rcaLog||[]).filter(function(x){return String(x.audit_date||'').slice(0,7)===mon;})
+    .map(function(x){return String(x.audit_date||'').slice(0,10);})).size||1;
+  const g={};
+  const ent=function(key,name,cluster,tlSet){
+    if(!g[key])g[key]={key:key,name:name||'Unmapped',cluster:cluster||'',tlSet:tlSet||new Set(),
+      done:0,actions:0,closed:0,pairs:{},cats:{}};
+    return g[key];};
+  // seed every entity that EXISTS, not only those that logged something — a team that did
+  // nothing all month is the row a manager most needs to see.
+  Object.keys(L.line).forEach(function(te){
+    if(!inScope(te))return;const l=L.line[te];
+    if(level==='tl')ent(te,l.tl,l.cluster,new Set([te]));
+    else if(level==='ados')ent(l.ados_email||'unmapped',l.ados,'',L.under.ados[l.ados_email]||new Set([te]));
+    else ent(l.zsm_email||'unmapped',l.zsm,'',L.under.zsm[l.zsm_email]||new Set([te]));
+  });
+  rows.forEach(function(x){
+    const te=norm(x.tl_email||''),l=L.line[te]||{};
+    const key=level==='tl'?(te||'unmapped'):level==='ados'?(l.ados_email||'unmapped'):(l.zsm_email||'unmapped');
+    const nm=level==='tl'?(x.tl_name||l.tl||nameFromEmail(te)):level==='ados'?l.ados:l.zsm;
+    const e=ent(key,nm,l.cluster,level==='tl'?new Set([te]):(L.under[level]&&L.under[level][key])||new Set([te]));
+    e.done++;
+    const act=String(x.action||'');
+    if(act&&act!=='No action needed'){e.actions++;if(String(x.action_status||'')==='done')e.closed++;}
+    const p=norm(x.lrm_email||'')+'|'+String(x.reason||'');e.pairs[p]=(e.pairs[p]||0)+1;
+    e.cats[x.category||'']=(e.cats[x.category||'']||0)+1;
+  });
+  return Object.keys(g).map(function(k){
+    const e=g[k],n=Math.max(1,e.tlSet.size);
+    const expected=DAILY_CAP*issuedDays*n;
+    // a team cannot clear more than it was issued — clamp so this reads the same as Team progress
+    const done=Math.min(e.done,expected);
+    let rep=0;Object.keys(e.pairs).forEach(function(p){if(e.pairs[p]>1)rep+=e.pairs[p];});
+    return{key:e.key,name:e.name,cluster:e.cluster,teams:n,done:done,expected:expected,days:issuedDays,
+      completion:expected?Math.min(100,Math.round(done/expected*100)):0,
+      actions:e.actions,closed:e.closed,
+      closure:e.actions?Math.round(e.closed/e.actions*100):null,
+      repeat:e.done?Math.round(rep/e.done*100):0};
+  }).sort(function(a,b){return b.completion-a.completion||b.done-a.done;});
+}
+function rootFreq(){
+  const mon=mtdMonth(),m={};
+  (S.rcaLog||[]).filter(function(x){return String(x.audit_date||'').slice(0,7)===mon;}).forEach(function(x){
+    const k=(x.category||'')+'|'+(x.reason||'');
+    const e=m[k]=m[k]||{cat:x.category||'',root:x.reason||'',n:0,coach:0,sys:0};
+    e.n++;if(x.fault==='system')e.sys++;else e.coach++;});
+  const all=Object.keys(m).map(function(k){return m[k];}).sort(function(a,b){return b.n-a.n;});
+  const tot=all.reduce(function(s,r){return s+r.n;},0)||1;
+  all.forEach(function(r){r.share=Math.round(r.n/tot*1000)/10;});
+  return all;
+}
+function actionRows(){
+  const mon=mtdMonth();
+  return (S.rcaLog||[]).filter(function(x){
+    return String(x.audit_date||'').slice(0,7)===mon&&x.action&&x.action!=='No action needed';})
+    .map(function(x){return{date:String(x.audit_date||'').slice(0,10),lead:x.lead_id,cat:x.category,
+      lrm:x.lrm_name||x.lrm_email,tl:x.tl_name||x.tl_email,root:x.reason,action:x.action,
+      owner:(OWNERS.find(function(o){return o[0]===x.owner;})||['',x.owner||''])[1],
+      fault:x.fault||'',status:String(x.action_status||'open')==='done'?'Done':'Open'};});
+}
+// ---- CSV export (admin) ----
+const csvCell=v=>{const s=String(v==null?'':v);return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s;};
+const csvOf=(head,rows)=>[head].concat(rows).map(function(r){return r.map(csvCell).join(',');}).join('\r\n');
+function download(name,text){
+  const b=new Blob(['\ufeff'+text],{type:'text/csv;charset=utf-8'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download=name;
+  document.body.appendChild(a);a.click();setTimeout(function(){URL.revokeObjectURL(a.href);a.remove();},400);
+}
+function exportCsv(kind){
+  const mon=mtdMonth();
+  if(kind==='mtd'){
+    const rows=[];
+    [['TL','tl'],['ADOS','ados'],['ZSM','zsm']].forEach(function(lv){
+      mtdBoard(lv[1]).forEach(function(r){rows.push([lv[0],r.name,r.cluster,r.teams,r.days,r.expected,r.done,
+        r.completion+'%',r.actions,r.closed,r.closure==null?'':r.closure+'%',r.repeat+'%']);});});
+    download('mtd-summary-'+mon+'.csv',csvOf(
+      ['level','name','cluster','teams','days_issued','expected_audits','audits_done','completion',
+       'actions_assigned','actions_closed','action_closure','repeat_rate'],rows));
+  } else if(kind==='actions'){
+    download('action-tracker-'+mon+'.csv',csvOf(
+      ['audit_date','lead_id','category','lrm','tl','root_cause','action','owner','fault','status'],
+      actionRows().map(function(r){return [r.date,r.lead,r.cat,r.lrm,r.tl,r.root,r.action,r.owner,r.fault,r.status];})));
+  } else {
+    download('root-causes-'+mon+'.csv',csvOf(
+      ['category','root_cause','count','share_pct','coachable','system'],
+      rootFreq().map(function(r){return [r.cat,r.root,r.n,r.share,r.coach,r.sys];})));
+  }
+}
 // ---- role scoping ----
 // The queue is work TLs do. Everyone above them (ZSM, ADOS, RCA auditors, admin) sees what
 // the teams did with it, never a queue of their own.
@@ -611,11 +754,12 @@ function screensFor(){
   // In SAMPLE mode every screen is reachable: a presenter has to be able to walk
   // stakeholders through the queue, the five whys and Submit, then the manager view,
   // without editing the URL mid-sentence.
-  if(SAMPLE)return [['queue','Audit queue'],['adher','My adherence'],['rca','RCA audit'],['mgr','Team progress'],['settings','Settings']];
+  if(SAMPLE)return [['queue','Audit queue'],['adher','My adherence'],['rca','RCA audit'],['mgr','Team progress'],['mtd','MTD score'],['settings','Settings']];
   const out=[];
   if(isTL())return [['queue','Audit queue'],['adher','My adherence']];
   if(isAud())out.push(['rca','RCA audit']);
   out.push(['mgr','Team progress']);
+  if(['admin','zsm','ados'].indexOf(S.role)>=0)out.push(['mtd','MTD score']);
   if(S.role==='admin')out.push(['settings','Settings']);
   return out;
 }function render(){
@@ -623,7 +767,7 @@ function screensFor(){
   const allow=screensFor().map(s=>s[0]);
   const scr=allow.includes(S.screen)?S.screen:allow[0];
   S.screen=scr;
-  el.innerHTML=sampleBanner()+nav()+(scr==='queue'?queueView():scr==='adher'?adherView():scr==='rca'?rcaView():scr==='settings'?settingsView():mgrView());
+  el.innerHTML=sampleBanner()+nav()+(scr==='queue'?queueView():scr==='adher'?adherView():scr==='rca'?rcaView():scr==='mtd'?mtdView():scr==='settings'?settingsView():mgrView());
 }
 function nav(){
   const meTl=TLS().find(t=>t.me);
@@ -646,19 +790,35 @@ function nav(){
   <div class="wrap" style="padding-top:0;padding-bottom:0"><div style="height:2px;background:var(--color-text)"></div></div>`;
 }
 
-function whyStart(l){const f=WHYS[l.cat];return f?f(l):null;}
-function whyWalk(l){const root=whyStart(l);const idx=(S.audits[l.id]&&S.audits[l.id].whyIdx)||[];const steps=[];let node=root,terminal='';for(let k=0;k<idx.length;k++){const opt=node&&node.a[idx[k]];if(!opt)break;steps.push({q:node.q,opt});if(opt.root){terminal=opt.root;node=null;break;}node=opt.to;}return{steps,node,terminal};}
-function whyBlockHtml(l){
-  const w=whyWalk(l);let h='';
-  w.steps.forEach((s,i)=>{
-    h+=`<div><div style="font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:${MUT(40)};margin-bottom:5px">Why ${i+1}</div><div style="font-size:13.5px;line-height:1.5;color:${MUT(70)};margin-bottom:6px">${esc(s.q)}</div><button data-act="whyBack" data-v="${i}" style="background:none;border:none;padding:0;cursor:pointer;font-family:inherit;text-align:left;font-size:14.5px;font-weight:600;color:var(--color-text);border-bottom:1.5px solid var(--color-text)">${esc(s.opt.t)}</button></div>`;
-  });
-  if(w.node){
-    const n=w.steps.length+1;
-    const opts=w.node.a.map((o,i)=>`<button data-act="why" data-v="${i}" style="display:block;width:100%;text-align:left;background:none;border:none;border-bottom:1px solid var(--color-divider);padding:11px 0;cursor:pointer;font-family:inherit;font-size:14px;line-height:1.45;color:var(--color-text)">${esc(o.t)}${o.root?`<span style="float:right;padding-left:14px;font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:${MUT(38)}">root</span>`:''}</button>`).join('');
-    h+=`<div><div style="font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:${MUT(40)};margin-bottom:5px">Why ${n}${n>=5?' · root':''}</div><div style="font-family:var(--font-heading);font-size:18px;line-height:1.35;margin-bottom:8px">${esc(w.node.q)}</div><div style="border-top:1px solid var(--color-divider)">${opts}</div></div>`;
+function r3Walk(l){
+  const t=RCA3[l.cat]||null,p=(S.audits[l.id]&&S.audits[l.id].r3)||[];
+  const s1=t&&p.length>0?t.w[p[0]]:null;
+  const s2=s1&&p.length>1?s1.y[p[1]]:null;
+  const root=s2&&p.length>2?s2.r[p[2]]:'';
+  return{t:t,s1:s1,s2:s2,root:root||'',step:p.length};
+}
+const R3LBL=['What happened','Why','Root cause'];
+function r3Block(l){
+  const w=r3Walk(l);if(!w.t)return '';
+  const chosen=[w.s1&&w.s1.t,w.s2&&w.s2.t,w.root];
+  const opts=[w.t.w,w.s1&&w.s1.y,w.s2&&w.s2.r];
+  const cap='font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:'+MUT(40)+';margin-bottom:5px';
+  let out='';
+  for(let i=0;i<3;i++){
+    if(chosen[i]){
+      out+='<div><div style="'+cap+'">Step '+(i+1)+' \u00b7 '+R3LBL[i]+'</div>'+
+        '<button data-act="r3back" data-v="'+i+'" style="background:none;border:none;padding:0;cursor:pointer;font-family:inherit;text-align:left;font-size:'+(i===2?'17px':'14.5px')+';font-weight:600;color:var(--color-text);border-bottom:1.5px solid var(--color-text);line-height:1.35">'+esc(chosen[i])+'</button></div>';
+      continue;
+    }
+    const list=opts[i];if(!list)break;
+    const btns=list.map(function(o,j){const txt=typeof o==='string'?o:o.t;
+      return '<button data-act="r3" data-v="'+j+'" style="display:block;width:100%;text-align:left;background:none;border:none;border-bottom:1px solid var(--color-divider);padding:11px 0;cursor:pointer;font-family:inherit;font-size:14px;line-height:1.45;color:var(--color-text)">'+esc(txt)+'</button>';}).join('');
+    out+='<div><div style="'+cap+'">Step '+(i+1)+' \u00b7 '+R3LBL[i]+'</div>'+
+      '<div style="font-family:var(--font-heading);font-size:18px;line-height:1.35;margin-bottom:8px">'+esc(w.t.q[i])+'</div>'+
+      '<div style="border-top:1px solid var(--color-divider)">'+btns+'</div></div>';
+    break;
   }
-  return h;
+  return out;
 }
 const done0=l=>rcaDone(l.id);
 
@@ -730,7 +890,7 @@ function heroQueue(){
   const total=L().length,done=audited(),open=total-done;
   const pct=total?Math.round(done/total*100):0;
   const urgent=L().filter(l=>!rcaDone(l.id)&&(l.silent||0)>=5).length;
-  const hi=L().filter(l=>{const x=S.audits[l.id];return x&&x.submitted&&x.sev==='high';}).length;
+  const hi=L().filter(l=>{const x=S.audits[l.id];return x&&x.submitted&&x.fault==='system';}).length;
   const stat=(v,lbl,tone)=>`<div style="min-width:78px">
     <div style="font-family:var(--font-heading);font-size:30px;line-height:1;font-weight:700;color:${tone||'var(--color-text)'}">${v}</div>
     <div style="font-size:12px;color:${MUT(52)};padding-top:6px;letter-spacing:.01em">${lbl}</div></div>`;
@@ -748,7 +908,7 @@ function heroQueue(){
       <div style="display:flex;gap:44px;flex-wrap:wrap;padding-bottom:4px">
         ${stat(open,'Open',open?'var(--color-text)':MUT(32))}
         ${stat(urgent,'Silent 5 days +',urgent?'var(--color-accent-2)':MUT(32))}
-        ${stat(hi,'High severity',hi?'var(--color-accent-700)':MUT(32))}
+        ${stat(hi,'System issues',hi?'var(--color-accent-700)':MUT(32))}
       </div>
     </div>
     <div style="padding-top:22px;display:flex;align-items:center;gap:16px">
@@ -813,13 +973,14 @@ function queueView(){
 function auditPanel(){
   const l=L().find(x=>x.id===S.selId)||{timeline:[]};if(!l.id)return'<div></div>';
   const cat=catObj(S.catKey),a=S.audits[l.id]||{},dl=catLeads(S.catKey),rank=dl.findIndex(x=>x.id===l.id)+1;
-  const w=whyWalk(l),concluded=!!w.terminal,done=rcaDone(l.id);
+  const w=r3Walk(l),concluded=!!w.root,done=rcaDone(l.id);
   // An RCA is only submittable once it says something: a root cause, a severity and a
   // corrective action. The blocker text names the missing piece instead of just greying
   // the button out.
-  const blocker=!concluded?'Work the whys to a root cause'
-    :!a.sev?'Set a severity'
-    :!a.action?'Choose a corrective action'
+  const blocker=!concluded?'Finish the three steps to a root cause'
+    :!a.action?'Choose an action for the LRM'
+    :!a.owner?'Say who owns that action'
+    :!a.fault?'Mark it coachable or a system issue'
     :'';
   const ready=!blocker;
   const kicker=t=>`<div style="font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:${MUT(40)};margin-bottom:8px">${t}</div>`;
@@ -827,6 +988,8 @@ function auditPanel(){
     const dot=r.kind==='done'?'width:9px;height:9px;border-radius:999px;background:var(--color-text)':r.kind==='miss'?'width:9px;height:9px;border-radius:999px;border:1.5px solid var(--color-accent-2)':'width:9px;height:9px;border-radius:999px;border:1.5px solid '+MUT(28);
     const conn=i>0?`<span style="flex:1;height:1px;margin-top:4px;min-width:18px;background:${MUT(18)}"></span>`:'';
     return conn+`<span style="display:flex;flex-direction:column;align-items:center;gap:8px;width:96px;flex:none"><span style="${dot}"></span><span style="font-size:11.5px;line-height:1.4;text-align:center;color:var(--color-text)">${esc(r.what||'')}</span><span style="font-size:11px;line-height:1.3;text-align:center;color:${MUT(45)}">${esc(r.when||'')}</span></span>`;}).join('');
+  const pick=(act,arr,cur)=>arr.map(s=>`<button data-act="${act}" data-v="${s[0]}" style="background:none;border:none;padding:0 0 3px;cursor:pointer;font-family:inherit;font-size:13.5px;color:${cur===s[0]?'var(--color-text)':MUT(45)};font-weight:${cur===s[0]?'600':'400'};border-bottom:1.5px solid ${cur===s[0]?'var(--color-text)':'transparent'}">${s[1]}</button>`).join('');
+  const own=pick('owner',OWNERS,a.owner),flt=pick('fault',FAULTS,a.fault);
   const sev=SEVS.map(s=>`<button data-act="sev" data-v="${s[0]}" style="background:none;border:none;padding:0 0 3px;cursor:pointer;font-family:inherit;font-size:13.5px;color:${a.sev===s[0]?'var(--color-text)':MUT(45)};font-weight:${a.sev===s[0]?'600':'400'};border-bottom:1.5px solid ${a.sev===s[0]?'var(--color-text)':'transparent'}">${s[1]}</button>`).join('');
 
   return `<div>
@@ -853,19 +1016,19 @@ function auditPanel(){
     <details style="padding:16px 0;border-bottom:1px solid var(--color-divider)"><summary style="font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:${MUT(40)};cursor:pointer">Full lead history</summary><div class="ls-scroll" style="display:flex;align-items:flex-start;overflow-x:auto;padding-top:18px">${tl}</div></details>
 
     <div style="padding:30px 0 0;border-top:none">
-      ${kicker('Root cause · five whys')}
-      <div style="display:flex;flex-direction:column;gap:20px;max-width:60ch">${whyBlockHtml(l)}</div>
+      ${kicker('Root cause · three steps')}
+      <div style="display:flex;flex-direction:column;gap:20px;max-width:60ch">${r3Block(l)}</div>
       ${concluded?`
-      <div style="padding:22px 0 0;margin-top:22px;border-top:1px solid var(--color-divider)">
-        ${kicker('Root cause')}
-        <div style="font-family:var(--font-heading);font-size:21px;line-height:1.3;max-width:44ch">${esc(w.terminal)}</div>
-        <button data-act="whyBack" data-v="0" style="background:none;border:none;padding:0;margin-top:8px;cursor:pointer;font-family:inherit;font-size:12.5px;color:${MUT(50)};text-decoration:underline">Start over</button>
+      <div style="padding:20px 0 0;margin-top:20px;border-top:1px solid var(--color-divider)">
+        <button data-act="r3back" data-v="0" style="background:none;border:none;padding:0;margin-top:8px;cursor:pointer;font-family:inherit;font-size:12.5px;color:${MUT(50)};text-decoration:underline">Start over</button>
       </div>
       <div style="display:flex;gap:56px;flex-wrap:wrap;padding:24px 0 0">
-        <div><div style="font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:${MUT(40)};margin-bottom:7px">Corrective action</div>
+        <div><div style="font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:${MUT(40)};margin-bottom:7px">Action for the LRM</div>
           <select data-act="action" style="font-family:inherit;font-size:14px;padding:6px 0;border:none;border-bottom:1px solid ${MUT(28)};background:none;color:var(--color-text);min-width:24ch">${ACTIONS.map(o=>`<option ${a.action===o?'selected':''}>${esc(o)}</option>`).join('')}</select></div>
-        <div><div style="font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:${MUT(40)};margin-bottom:7px">Severity</div>
-          <div style="display:flex;gap:18px;padding-top:4px">${sev}</div></div>
+        <div><div style="font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:${MUT(40)};margin-bottom:7px">Who owns it</div>
+          <div style="display:flex;gap:18px;padding-top:4px;flex-wrap:wrap">${own}</div></div>
+        <div><div style="font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:${MUT(40)};margin-bottom:7px">Coachable or system</div>
+          <div style="display:flex;gap:18px;padding-top:4px;flex-wrap:wrap">${flt}</div></div>
       </div>
       <div style="padding:24px 0 0;max-width:64ch">
         <div style="font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:${MUT(40)};margin-bottom:7px">Coaching note to ${esc(l.LRM)}</div>
@@ -889,7 +1052,7 @@ function auditPanel(){
 function adherView(){
   const total=L().length,done=audited(),miss=total-done;
   const actionsSet=L().filter(l=>{const x=S.audits[l.id];return x&&x.reason&&x.action&&x.action!=='No action needed';}).length;
-  const hi=L().filter(l=>{const x=S.audits[l.id];return x&&x.reason&&x.sev==='high';}).length;
+  const hi=L().filter(l=>{const x=S.audits[l.id];return x&&x.reason&&x.fault==='system';}).length;
   const mtd=mtdStats();
   const stat=(v,lbl,s,icon,tone)=>`<div>
     <div style="display:flex;align-items:center;gap:8px">${icon?ic(icon,17,tone||MUT(38)):''}<div style="font-family:var(--font-heading);font-size:40px;line-height:1;font-weight:700;font-variant-numeric:tabular-nums">${v}</div></div>
@@ -924,23 +1087,141 @@ function adherView(){
       ${stat(done+' <span style="color:'+MUT(30)+'">/ '+total+'</span>','Logged today',miss?miss+' still open':(total?'all clear':''),'ph-check-square',miss?MUT(38):'var(--color-accent)')}
       ${stat(mtd.logged,'Logged this month','across '+mtd.days+' day'+(mtd.days===1?'':'s'),'ph-calendar-dots')}
       ${stat(actionsSet,'Actions assigned','','ph-flag-pennant')}
-      ${stat(hi,'High severity','','ph-warning-octagon',hi?'var(--color-accent-2)':MUT(38))}
+      ${stat(hi,'System issues','not a coaching gap','ph-gear-six',hi?'var(--color-accent-2)':MUT(38))}
     </div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:64px;align-items:start;max-width:1100px">
       <div><div style="font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:${MUT(40)};padding-bottom:6px">Coverage by category</div><div style="border-top:1px solid var(--color-text)">${gaps}</div></div>
       <div><div style="font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:${MUT(40)};padding-bottom:6px">By LRM</div><div style="border-top:1px solid var(--color-text)">${LRMs||emptyLrm}</div></div>
     </div></div>`;
 }
+// ---- MTD score ----
+// One headline number — % of audits done till date — with the two follow-ons that say
+// whether the audits meant anything: were the actions closed, and is the same LRM failing
+// the same way twice.
+const LVLS=[['tl','By team lead'],['ados','By ADOS'],['zsm','By ZSM']];
+function mtdView(){
+  const lvl=S.mtdLvl||'tl',board=mtdBoard(lvl);
+  const mon=mtdMonth(),d=new Date(mon+'-01T00:00:00');
+  const monLbl=isNaN(d)?mon:MON[d.getMonth()]+' '+d.getFullYear();
+  const sum=board.reduce(function(a,r){a.done+=r.done;a.exp+=r.expected;a.act+=r.actions;a.cl+=r.closed;return a;},
+    {done:0,exp:0,act:0,cl:0});
+  const pct=sum.exp?Math.round(sum.done/sum.exp*100):0;
+  const closure=sum.act?Math.round(sum.cl/sum.act*100):null;
+  const repAll=board.length?Math.round(board.reduce(function(a,r){return a+r.repeat*r.done;},0)/Math.max(1,sum.done)):0;
+  const days=(board[0]&&board[0].days)||0;
+  const isAdmin=S.role==='admin';
+
+  const hero=function(v,lbl,sub,tone){return '<div style="min-width:150px">'+
+    '<div style="font-family:var(--font-heading);font-size:64px;line-height:.92;font-weight:700;letter-spacing:-.03em;font-variant-numeric:tabular-nums;color:'+(tone||'var(--color-text)')+'">'+v+'</div>'+
+    '<div style="font-size:13.5px;color:'+MUT(58)+';padding-top:10px">'+lbl+'</div>'+
+    (sub?'<div style="font-size:12.5px;color:'+MUT(40)+';padding-top:3px">'+sub+'</div>':'')+'</div>';};
+
+  const lvlBtn=LVLS.map(function(x){const on=x[0]===lvl;
+    return '<button data-act="mtdLvl" data-v="'+x[0]+'" style="background:none;border:none;padding:0 0 4px;cursor:pointer;font-family:inherit;font-size:14px;color:'+(on?'var(--color-text)':MUT(48))+';font-weight:'+(on?'600':'400')+';border-bottom:1.5px solid '+(on?'var(--color-text)':'transparent')+'">'+x[1]+'</button>';}).join('');
+
+  const th='text-align:left;font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;color:'+MUT(45)+';font-weight:600;padding:0 16px 9px 0;white-space:nowrap';
+  const td='padding:13px 16px 13px 0;border-bottom:1px solid var(--color-divider);font-size:14px;vertical-align:middle';
+  const num=td+';font-variant-numeric:tabular-nums;white-space:nowrap';
+  const rows=board.map(function(r){
+    const tone=r.completion>=90?'var(--color-accent)':r.completion>=70?'var(--color-text)':'var(--color-accent-2)';
+    return '<tr>'+
+      '<td style="'+td+'"><span style="font-weight:600">'+esc(r.name)+'</span>'+
+        (r.cluster?'<span style="color:'+MUT(42)+'"> \u00b7 '+esc(r.cluster)+'</span>':'')+
+        (lvl!=='tl'?'<span style="color:'+MUT(42)+'"> \u00b7 '+r.teams+' TL'+(r.teams===1?'':'s')+'</span>':'')+'</td>'+
+      '<td style="'+num+';width:210px"><span style="display:flex;align-items:center;gap:12px">'+
+        '<span style="flex:1;min-width:70px">'+bar(Math.min(100,r.completion),tone)+'</span>'+
+        '<span style="min-width:4ch;text-align:right;font-weight:600;color:'+tone+'">'+r.completion+'%</span></span></td>'+
+      '<td style="'+num+'">'+r.done+' <span style="color:'+MUT(35)+'">/ '+r.expected+'</span></td>'+
+      '<td style="'+num+'">'+(r.closure==null?'<span style="color:'+MUT(35)+'">\u2014</span>':r.closure+'%')+
+        '<span style="color:'+MUT(38)+';font-size:12.5px"> '+(r.actions?' '+r.closed+'/'+r.actions:'')+'</span></td>'+
+      '<td style="'+num+';color:'+(r.repeat>=30?'var(--color-accent-2-800)':MUT(65))+'">'+r.repeat+'%</td></tr>';}).join('');
+
+  const roots=rootFreq().slice(0,8);
+  const rootMax=(roots[0]&&roots[0].n)||1;
+  const rootList=roots.map(function(r){const c=catObj(r.cat);
+    return '<div style="padding:12px 0;border-bottom:1px solid var(--color-divider)">'+
+      '<div style="display:flex;align-items:baseline;gap:14px">'+
+        '<span style="flex:1;font-size:14px;line-height:1.4;text-wrap:pretty">'+esc(r.root)+'</span>'+
+        '<span style="font-size:13.5px;font-variant-numeric:tabular-nums;font-weight:600">'+r.n+'</span>'+
+        '<span style="font-size:12.5px;color:'+MUT(45)+';min-width:5ch;text-align:right">'+r.share+'%</span></div>'+
+      '<div style="display:flex;align-items:center;gap:12px;padding-top:7px">'+
+        '<span style="flex:1">'+bar(r.n/rootMax*100,r.sys>r.coach?'var(--color-accent-2)':'var(--color-accent)')+'</span>'+
+        '<span style="font-size:11.5px;color:'+MUT(42)+';white-space:nowrap">'+esc(c?c.short:r.cat)+'</span></div></div>';}).join('');
+
+  const acts=actionRows(),open=acts.filter(function(a){return a.status==='Open';}).length;
+  const af=S.actFilter||'open';
+  const shown=acts.filter(function(a){return af==='all'||(af==='open'?a.status==='Open':a.status==='Done');}).slice(0,60);
+  const afBtn=function(k,l,n){const on=af===k;
+    return '<button data-act="actFilter" data-v="'+k+'" style="background:none;border:none;padding:0 0 3px;cursor:pointer;font-family:inherit;font-size:13px;color:'+(on?'var(--color-text)':MUT(48))+';font-weight:'+(on?'600':'400')+';border-bottom:1.5px solid '+(on?'var(--color-text)':'transparent')+'">'+l+' <span style="color:'+MUT(38)+'">'+n+'</span></button>';};
+  const actList=shown.map(function(a){
+    const k=a.date+'|'+a.lead,busy=S.actBusy===k,done=a.status==='Done';
+    return '<div style="display:flex;align-items:flex-start;gap:16px;padding:13px 0;border-bottom:1px solid var(--color-divider)">'+
+      '<div style="flex:1;min-width:0">'+
+        '<div style="font-size:14px;line-height:1.4;font-weight:'+(done?'400':'600')+';color:'+(done?MUT(45):'var(--color-text)')+';text-wrap:pretty">'+esc(a.action)+'</div>'+
+        '<div style="font-size:12.5px;color:'+MUT(48)+';padding-top:4px">'+esc(a.owner||'\u2014')+' \u00b7 '+esc(a.lrm||'')+' \u00b7 TL '+esc(a.tl||'')+' \u00b7 '+esc(fmtD(a.date))+'</div>'+
+      '</div>'+
+      (done
+        ? '<span style="display:flex;align-items:center;gap:6px;font-size:12.5px;color:'+MUT(45)+';white-space:nowrap;padding-top:2px">'+ic('ph-check-circle',14,'var(--color-accent)')+'Done</span>'+
+          '<button data-act="actDone" data-v="'+k+'|open" '+(busy?'disabled':'')+' style="background:none;border:none;padding:0;cursor:pointer;font-family:inherit;font-size:12.5px;color:'+MUT(45)+';text-decoration:underline;white-space:nowrap">Reopen</button>'
+        : '<button data-act="actDone" data-v="'+k+'|done" '+(busy?'disabled':'')+' class="ls-btn" style="background:none;border:1px solid '+MUT(22)+';padding:6px 13px;cursor:pointer;font-family:inherit;font-size:12.5px;white-space:nowrap;color:var(--color-text)">'+(busy?'Saving\u2026':'Mark done')+'</button>')+
+    '</div>';}).join('');
+  const expBtn=function(k,l,s){return '<button data-act="exportCsv" data-v="'+k+'" class="ls-btn" style="display:block;text-align:left;background:none;border:none;border-bottom:1px solid var(--color-divider);width:100%;padding:13px 0;cursor:pointer;font-family:inherit">'+
+    '<span style="display:flex;align-items:center;gap:10px"><span style="flex:1;font-size:14px;font-weight:600">'+l+'</span>'+ic('ph-download-simple',16,MUT(45))+'</span>'+
+    '<span style="display:block;font-size:12.5px;color:'+MUT(48)+';padding-top:3px">'+s+'</span></button>';};
+
+  const empty=!sum.done;
+  return '<div class="wrap" style="padding-bottom:80px;animation:lsfade .25s ease">'+
+    '<div style="padding:38px 0 30px">'+
+      kicker(esc(monLbl)+' &middot; month to date &middot; '+days+' day'+(days===1?'':'s')+' issued',10)+
+      '<h2 style="margin:0;font-family:var(--font-heading);font-size:44px;line-height:1;font-weight:700;letter-spacing:-.02em">MTD score</h2>'+
+      '<div style="font-size:14.5px;line-height:1.6;color:'+MUT(55)+';padding-top:14px;max-width:70ch;text-wrap:pretty">Every team lead is expected to clear '+DAILY_CAP+' audits on each day the queue runs. This is what they actually cleared, whether the actions they raised were closed, and how often the same LRM keeps failing the same way.</div>'+
+    '</div>'+
+    '<div style="display:flex;gap:70px;flex-wrap:wrap;padding-bottom:44px">'+
+      hero(pct+'%','Audits done till date',sum.done+' of '+sum.exp+' expected',pct>=90?'var(--color-accent)':pct<70?'var(--color-accent-2)':'')+
+      hero(closure==null?'\u2014':closure+'%','Actions closed',sum.act?sum.cl+' of '+sum.act+' assigned':'no actions raised yet')+
+      hero(repAll+'%','Repeat findings','same LRM, same root cause',repAll>=30?'var(--color-accent-2)':'')+
+    '</div>'+
+    (empty?'<div style="font-size:14.5px;line-height:1.6;color:'+MUT(50)+';max-width:60ch;padding-bottom:40px">No RCAs have been logged this month yet, so there is nothing to score. The board fills in as team leads submit.</div>':'')+
+    '<div style="display:flex;align-items:baseline;gap:26px;flex-wrap:wrap;padding-bottom:16px">'+lvlBtn+'</div>'+
+    '<table style="width:100%;border-collapse:collapse;margin-bottom:56px">'+
+      '<thead><tr><th style="'+th+'">'+(lvl==='tl'?'Team lead':lvl==='ados'?'ADOS':'ZSM')+'</th>'+
+      '<th style="'+th+'">Audits done till date</th><th style="'+th+'">Done / expected</th>'+
+      '<th style="'+th+'">Actions closed</th><th style="'+th+'">Repeat rate</th></tr></thead>'+
+      '<tbody>'+(rows||'<tr><td colspan="5" style="'+td+';color:'+MUT(45)+'">No reporting lines in scope.</td></tr>')+'</tbody></table>'+
+    '<div style="display:grid;grid-template-columns:'+(isAdmin?'1.4fr 1fr':'1fr')+';gap:64px;align-items:start;max-width:1100px">'+
+      '<div>'+kicker('Root causes this month',6)+'<div style="border-top:1px solid var(--color-text)">'+
+        (rootList||'<div style="padding:12px 0;font-size:13.5px;color:'+MUT(45)+'">Nothing logged yet.</div>')+'</div></div>'+
+      (isAdmin?'<div>'+kicker('Export',6)+
+        '<div style="font-size:13px;line-height:1.55;color:'+MUT(52)+';padding:0 0 10px;text-wrap:pretty">CSV, this month, scoped to everything you can see.</div>'+
+        '<div style="border-top:1px solid var(--color-text)">'+
+        expBtn('mtd','MTD summary','All three levels \u2014 TL, ADOS and ZSM \u2014 in one file.')+
+        expBtn('actions','Action tracker',acts.length+' action'+(acts.length===1?'':'s')+', '+open+' still open.')+
+        expBtn('roots','Root-cause frequency',rootFreq().length+' distinct root cause'+(rootFreq().length===1?'':'s')+'.')+
+        '</div></div>':'')+
+    '</div>'+
+    '<div style="padding:56px 0 0;max-width:820px">'+
+      '<div style="display:flex;align-items:baseline;gap:22px;flex-wrap:wrap;padding-bottom:12px">'+
+        kicker('Action tracker',0)+
+        '<span style="flex:1"></span>'+
+        afBtn('open','Open',open)+afBtn('done','Done',acts.length-open)+afBtn('all','All',acts.length)+
+      '</div>'+
+      '<div style="border-top:1px solid var(--color-text)">'+
+        (actList||'<div style="padding:13px 0;font-size:13.5px;color:'+MUT(45)+'">No actions in this view.</div>')+
+      '</div>'+
+      (shown.length<acts.length&&af==='all'?'<div style="font-size:12.5px;color:'+MUT(42)+';padding-top:12px">Showing the first 60. Export for the full list.</div>':'')+
+    '</div>'+
+    '</div>';
+}
 function assigneesFor(origTl){const names=[origTl];TLS().forEach(t=>{if(t.name&&names.indexOf(t.name)<0)names.push(t.name);});return names.filter(Boolean);}
 function rcaSubs(){
-  const live=L().filter(l=>rcaDone(l.id)).map(l=>{const x=S.audits[l.id];return{id:'live-'+l.id,lead:l.name,LRM:l.LRM,tl:myTlName(),cat:l.cat,rca:x.reason,action:x.action,sev:x.sev||'med',when:'just now',live:true};});
+  const live=L().filter(l=>rcaDone(l.id)).map(l=>{const x=S.audits[l.id];return{id:'live-'+l.id,lead:l.name,LRM:l.LRM,tl:myTlName(),cat:l.cat,rca:x.reason,action:x.action,fault:x.fault||'coachable',when:'just now',live:true};});
   return live;
 }
 function rcaView(){
   const subs=rcaSubs();
   const rv=id=>S.rcaReview[id]||{};
   const total=subs.length,acc=subs.filter(s=>rv(s.id).verdict==='accept').length,rew=subs.filter(s=>rv(s.id).verdict==='rework').length,pend=total-acc-rew;
-  const cards=subs.map(s=>{const r=rv(s.id),v=r.verdict,c=catObj(s.cat),sm=SEVMETA[s.sev]||SEVMETA.med;
+  const cards=subs.map(s=>{const r=rv(s.id),v=r.verdict,c=catObj(s.cat),sm=FAULTMETA[s.fault]||FAULTMETA.coachable;
     const catcls='tag '+(s.cat==='mcch_past'||s.cat==='mcch_future'?'tag-accent-2':'tag-accent');
     const accStyle='padding:8px 14px;font-size:13px;border:1.5px solid '+(v==='accept'?'var(--color-accent-2);background:var(--color-accent-2-100);color:var(--color-accent-2-800)':MUT(16)+';color:'+MUT(78));
     const rewStyle='padding:8px 14px;font-size:13px;border:1.5px solid '+(v==='rework'?'var(--color-accent);background:var(--color-accent-200);color:var(--color-accent-800)':MUT(16)+';color:'+MUT(78));
@@ -1267,7 +1548,7 @@ function mgrView(){
   const doneFor=tl=>doneByTl(tl);
   const totAll=tls.reduce((s,t)=>s+t.total,0);
   const rows=tls.map(t=>{
-    const tot=t.total,dn=doneFor(t.email),open=tot-dn,mine=t.email===myTl,pc=tot?dn/tot*100:0;
+    const tot=t.total,dn=Math.min(tot,doneFor(t.email)),open=tot-dn,mine=t.email===myTl,pc=tot?dn/tot*100:0;
     const td=`padding:12px 10px;border-bottom:1px solid var(--color-divider);font-variant-numeric:tabular-nums;text-align:right`;
     const tone=pc>=100?'var(--color-accent)':pc>=50?'var(--color-text)':'var(--color-accent-2)';
     return `<tr class="ls-row">
@@ -1317,7 +1598,7 @@ function patch(id,o){S.audits[id]=Object.assign({reason:'',sev:'',note:'',action
 // the TL presses Submit. That press is what gets logged and what "done" counts.
 function submitRca(id){
   const a=S.audits[id]||{};
-  if(!a.reason||!a.sev||!a.action)return;
+  if(!a.reason||!a.action||!a.owner||!a.fault)return;
   const d=new Date(),hh=d.getHours()%12||12,ap=d.getHours()<12?'AM':'PM';
   patch(id,{submitted:true,at:hh+':'+String(d.getMinutes()).padStart(2,'0')+' '+ap});
   queueRca(id);
@@ -1336,8 +1617,14 @@ document.addEventListener('click',e=>{
   else if(act==='cat'){S.catKey=v;S.selId=(catLeads(v)[0]||{}).id;render();}
   else if(act==='lead'){S.selId=v;render();}
   else if(act==='sev'){patch(S.selId,{sev:v});render();}
-  else if(act==='why'){const l=L().find(x=>x.id===S.selId);if(!l)return;const idx=((S.audits[S.selId]&&S.audits[S.selId].whyIdx)||[]).slice();idx.push(+v);patch(S.selId,{whyIdx:idx});const w=whyWalk(l);if(w.terminal){patch(S.selId,{reason:w.terminal});if(!(S.audits[S.selId]&&S.audits[S.selId].sev))patch(S.selId,{sev:'med'});}else patch(S.selId,{reason:''});render();}
-  else if(act==='whyBack'){const idx=((S.audits[S.selId]&&S.audits[S.selId].whyIdx)||[]).slice(0,+v);patch(S.selId,{whyIdx:idx,reason:''});render();}
+  else if(act==='r3'){const l=L().find(x=>x.id===S.selId);if(!l)return;const p=((S.audits[S.selId]&&S.audits[S.selId].r3)||[]).slice();p.push(+v);patch(S.selId,{r3:p});patch(S.selId,{reason:r3Walk(l).root||''});render();}
+  else if(act==='r3back'){const p=((S.audits[S.selId]&&S.audits[S.selId].r3)||[]).slice(0,+v);patch(S.selId,{r3:p,reason:''});render();}
+  else if(act==='owner'){patch(S.selId,{owner:v});render();}
+  else if(act==='fault'){patch(S.selId,{fault:v});render();}
+  else if(act==='mtdLvl'){S.mtdLvl=v;render();}
+  else if(act==='exportCsv'){exportCsv(v);}
+  else if(act==='actDone'){const p=String(v).split('|');setActionStatus(p[0],p[1],p[2]);}
+  else if(act==='actFilter'){S.actFilter=v;render();}
   else if(act==='submitRca'){submitRca(S.selId);}
   else if(act==='reopen'){patch(S.selId,{submitted:false});render();}
   else if(act==='prev'){const dl=catLeads(S.catKey),i=dl.findIndex(x=>x.id===S.selId);S.selId=dl[(i-1+dl.length)%dl.length].id;render();}
