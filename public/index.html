@@ -84,7 +84,7 @@ const ACTIONS=['No action needed','LRM to call the customer today','LRM to set a
  'Reassign to another LRM','TL to coach the LRM','Escalate to ADOS'];
 // Every action needs a name against it, and a verdict on whether this is a person problem
 // or a system one \u2014 the two things the old form could not say.
-const OWNERS=[['lrm','The LRM'],['tl','The TL'],['ados','ADOS'],['ops','Ops / system']];
+const OWNERS=[['lrm','The LRM'],['tl','The TL'],['sc','SC']];
 const FAULTS=[['coachable','Coachable \u2014 behaviour or skill'],['system','System issue \u2014 process or tooling']];
 const FAULTMETA={coachable:['Coachable','background:var(--color-accent-100);color:var(--color-accent-800)'],
  system:['System','background:var(--color-accent-2-100);color:var(--color-accent-2-800)']};
@@ -105,70 +105,43 @@ const MTD=null; // month-to-date adherence needs a shared RCA history store; nev
 const RCA3={
  mcch_past:{q:['What happened with this meeting?','Why did that happen?','Which root cause fits best?'],w:[
   {t:'The meeting never took place',y:[
-    {t:'Customer did not turn up or was unavailable',r:['No-show \u2014 no reconfirmation call before the slot','No-show \u2014 customer never genuinely committed','No-show \u2014 wrong address or slot communicated']},
-    {t:'LRM did not reach the customer or the site',r:['LRM missed the slot \u2014 day plan overloaded','LRM missed the slot \u2014 double-booked','LRM missed the slot \u2014 travel or coverage gap']},
+    {t:'Customer did not turn up or was unavailable',r:['No reconfirmation call before the slot','Customer rescheduled the meeting','Wrong / incomplete address, location missing']},
+    {t:'SC did not reach the customer or the site',r:['SC no-show','SC got late in previous meeting','SC distance issue']},
     {t:'The slot was never a real appointment',r:['MCCH marked without customer agreement','Slot entered to hold the stage']}]},
   {t:'The meeting happened but the stage never moved',y:[
-    {t:'LRM did not update the CRM after the meeting',r:['Meeting done, stage not updated \u2014 process discipline','Outcome logged against the wrong stage']},
-    {t:'LRM is waiting on the customer before updating',r:['Ambiguous outcome \u2014 lead parked at MCCH','Waiting on customer with no next date set']}]},
-  {t:'The customer postponed it',y:[
-    {t:'No fresh date was captured at the postponement',r:['Postponed with no new MCCH date','Postponed, follow-up left open-ended']},
-    {t:'Customer went silent after postponing',r:['Postponed then unresponsive \u2014 no win-back cadence']}]},
+    {t:'SC did not mark MD after the meeting',r:['Meeting done, stage not updated \u2014 process discipline']}]},
   {t:'Nothing was attempted after the date lapsed',y:[
-    {t:'Nothing surfaced the lapsed meeting to the LRM',r:['No reminder after the MCCH date lapsed']},
-    {t:'LRM deprioritised it against newer leads',r:['Lapsed MCCH deprioritised vs newer leads']}]}]},
+    {t:'LRM missed it',r:['Hygiene issue']}]}]},
  followup_missed:{q:['What happened on the due date?','Why did that happen?','Which root cause fits best?'],w:[
   {t:'No attempt was made at all',y:[
-    {t:'It fell out of the day plan',r:['No reminder surfaced the due follow-up','LRM capacity exceeded \u2014 never reached']},
-    {t:'LRM chose to work other leads first',r:['Follow-up deprioritised vs other leads']},
-    {t:'The lead was reassigned and never picked up',r:['Reassigned lead not actioned by the new LRM']}]},
-  {t:'An attempt was made but did not connect',y:[
-    {t:'No retry after the failed attempt',r:['Single attempt, no retry cadence','Retried on the same unreachable number']},
-    {t:'Contact details are wrong or missing',r:['Bad or missing contact data']}]},
-  {t:'The customer was reached but nothing moved',y:[
-    {t:'No new follow-up date was committed',r:['Connected, no next date committed']},
-    {t:'Customer is stalling or non-committal',r:['Customer stalling \u2014 no qualifying push','Objection surfaced but not handled']}]},
+    {t:'Missed by LRM',r:['LRM absent / week-off','Hygiene issue']}]},
   {t:'It was worked but never logged',y:[
-    {t:'LRM did not update the CRM',r:['Contact attempted but not logged \u2014 data gap']},
-    {t:'Call was placed outside the dialler',r:['Called from a personal number \u2014 no call record']}]}]},
+    {t:'LRM did not update Lighthouse',r:['Contact attempted but not logged \u2014 process gap']}]}]},
  not_interested:{q:['What happened at the close?','Why did that happen?','Which root cause fits best?'],w:[
-  {t:'Closed before any real pitch',y:[
-    {t:'LRM judged the intent too quickly',r:['Premature close \u2014 intent misjudged, no MD']},
-    {t:'Pressure to keep the pipeline clean',r:['Pipeline-hygiene pressure \u2014 closed prematurely']}]},
-  {t:'An objection was raised and not handled',y:[
-    {t:'LRM had no rebuttal or offer to put',r:['Objection known, no rebuttal attempted','Pricing objection, no offer positioned']},
-    {t:'LRM never probed the real reason',r:['Objection not probed \u2014 discovery gap']}]},
-  {t:'The reason was never captured',y:[
-    {t:'Handled verbally, never written down',r:['Objection handled but not logged \u2014 data gap']},
-    {t:'Reason code left blank or generic',r:['NI reason code missing or generic']}]},
-  {t:'Genuinely not interested, but dropped cold',y:[
-    {t:'No win-back or nurture path was tried',r:['Valid NI, no win-back attempt','Closed and dropped \u2014 no nurture path']}]}]},
+  {t:'Is \u201cNot interested\u201d true? \u2014 Yes',y:[
+    {t:'Comment updated on Lighthouse',r:[]}]},
+  {t:'Is the lead interested? \u2014 Yes',y:[
+    {t:'LRM did not handle the objection',r:[]},
+    {t:'LRM did not do micro-selling',r:[]}]},
+  {t:'Is the stage updated correctly?',y:[
+    {t:'Yes',r:[]},
+    {t:'No',r:[]}]}]},
  not_qualified:{q:['What happened at the disqualification?','Why did that happen?','Which root cause fits best?'],w:[
-  {t:'Disqualified with no discovery call',y:[
-    {t:'LRM decided on assumption',r:['Disqualified on assumption \u2014 no discovery']},
-    {t:'Customer could not be reached to qualify',r:['Unreachable for discovery \u2014 no retry cadence','Bad contact data \u2014 could not qualify']}]},
-  {t:'Discovery happened but the criteria do not apply',y:[
-    {t:'LRM misread the qualification criteria',r:['DQ criteria misunderstood \u2014 training gap']},
-    {t:'Reason code is wrong or missing',r:['DQ reason code missing or incorrect']}]},
-  {t:'It genuinely does not qualify',y:[
-    {t:'The disqualifier is real and documented',r:['Valid DQ \u2014 correctly closed']},
-    {t:'The disqualifier was findable much earlier',r:['Valid DQ but caught late \u2014 wasted LRM effort']}]},
+  {t:'Disqualified with no qualification call',y:[
+    {t:'LRM decided on assumption',r:['Disqualified on assumption \u2014 no proper qualification']},
+    {t:'Customer could not be reached to qualify',r:['Customer not reachable \u2014 no retry cadence','Bad contact data \u2014 could not qualify']}]},
+  {t:'Lead does not qualify',y:[
+    {t:'The disqualifier is real and documented',r:['Valid disqualification \u2014 correctly marked']}]},
   {t:'It qualifies but was closed anyway',y:[
-    {t:'Closed to clear the working queue',r:['Reopen candidate \u2014 lead actually qualifies']},
-    {t:'The wrong record was closed',r:['Wrong record closed \u2014 CRM handling error']}]}]},
+    {t:'Incorrect stage update',r:['Marked incorrectly on Lighthouse']}]}]},
  mcch_future:{q:['What is wrong with this upcoming meeting?','Why is it that way?','Which root cause fits best?'],w:[
   {t:'Customer confirmation is not on record',y:[
     {t:'LRM set the date without the customer agreeing',r:['MCCH set without customer confirmation']},
     {t:'Confirmed verbally, never logged',r:['Customer confirmed but not logged \u2014 data gap']}]},
   {t:'The slot sits outside the D+2 window',y:[
-    {t:'Customer is only available later',r:['Slot beyond D+2 \u2014 customer availability']},
-    {t:'LRM pushed it out to manage their load',r:['Slot beyond D+2 \u2014 LRM scheduling to ease load']}]},
-  {t:'No preparation has been done',y:[
-    {t:'No prep step exists in the LRM routine',r:['No meeting-prep note sent to customer']},
-    {t:'Site or requirement details are missing',r:['Meeting booked with incomplete site details']}]},
+    {t:'Customer is only available later',r:['Slot beyond D+2 \u2014 customer availability']}]},
   {t:'The slot looks held or duplicated',y:[
-    {t:'Placeholder booked to hold the stage',r:['Placeholder MCCH \u2014 stage held artificially']},
-    {t:'Duplicate lead or duplicate booking',r:['Duplicate slot \u2014 needs cleanup']}]}]},
+    {t:'LRM booked it to show MCCH',r:['Fake MCCH']}]}]},
 };
 const DEFAULT_AUDITORS=['quality.desk@solarsquare.in'];
 const ADMIN_FALLBACK=['analytics.sse@solarsquare.in'];
@@ -329,7 +302,7 @@ function sampleData(role){
     const t=RCA3[cat];if(!t)return null;
     const w=t.w[i%t.w.length];
     const y=w.y[i%w.y.length];
-    return{what:w.t,why:y.t,root:y.r[i%y.r.length]};
+    return{what:w.t,why:y.t,root:(y.r&&y.r.length)?y.r[i%y.r.length]:y.t};
   };
   queue.forEach((r,i)=>{
     const h=hierarchy.find(x=>x.lrm_email===r.lrm_email)||{};
@@ -849,17 +822,19 @@ function r3Walk(l){
   const t=RCA3[l.cat]||null,p=(S.audits[l.id]&&S.audits[l.id].r3)||[];
   const s1=t&&p.length>0?t.w[p[0]]:null;
   const s2=s1&&p.length>1?s1.y[p[1]]:null;
-  const root=s2&&p.length>2?s2.r[p[2]]:'';
-  return{t:t,s1:s1,s2:s2,root:root||'',step:p.length};
+  const leaf=!!(s2&&(!s2.r||!s2.r.length));
+  const root=leaf?s2.t:(s2&&p.length>2?s2.r[p[2]]:'');
+  return{t:t,s1:s1,s2:s2,root:root||'',step:p.length,leaf:leaf};
 }
 const R3LBL=['What happened','Why','Root cause'];
 function r3Block(l){
   const w=r3Walk(l);if(!w.t)return '';
   const chosen=[w.s1&&w.s1.t,w.s2&&w.s2.t,w.root];
-  const opts=[w.t.w,w.s1&&w.s1.y,w.s2&&w.s2.r];
+  const opts=[w.t.w,w.s1&&w.s1.y,w.leaf?null:(w.s2&&w.s2.r)];
   const cap='font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:'+MUT(40)+';margin-bottom:5px';
   let out='';
   for(let i=0;i<3;i++){
+    if(w.leaf&&i===2)break;
     if(chosen[i]){
       out+='<div><div style="'+cap+'">Step '+(i+1)+' \u00b7 '+R3LBL[i]+'</div>'+
         '<button data-act="r3back" data-v="'+i+'" style="background:none;border:none;padding:0;cursor:pointer;font-family:inherit;text-align:left;font-size:'+(i===2?'17px':'14.5px')+';font-weight:600;color:var(--color-text);border-bottom:1.5px solid var(--color-text);line-height:1.35">'+esc(chosen[i])+'</button></div>';
@@ -1039,10 +1014,10 @@ function auditPanel(){
   const l=L().find(x=>x.id===S.selId)||{timeline:[]};if(!l.id)return'<div></div>';
   const cat=catObj(S.catKey),a=S.audits[l.id]||{},dl=catLeads(S.catKey),rank=dl.findIndex(x=>x.id===l.id)+1;
   const w=r3Walk(l),concluded=!!w.root,done=rcaDone(l.id);
-  // An RCA is only submittable once it says something: a root cause, a severity and a
-  // corrective action. The blocker text names the missing piece instead of just greying
-  // the button out.
-  const blocker=!concluded?'Finish the three steps to a root cause'
+  // An RCA is only submittable once it says something: a root cause, an owner and a
+  // corrective action. Most branches take three clicks; a few conclude at the second,
+  // where the 'why' IS the root cause. The blocker text names the missing piece.
+  const blocker=!concluded?'Work the steps down to a root cause'
     :!a.action?'Choose an action for the LRM'
     :!a.owner?'Say who owns that action'
     :!a.fault?'Mark it coachable or a system issue'
@@ -1082,7 +1057,7 @@ function auditPanel(){
     <details style="padding:16px 0;border-bottom:1px solid var(--color-divider)"><summary style="font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:${MUT(40)};cursor:pointer">Full lead history</summary><div class="ls-scroll" style="display:flex;align-items:flex-start;overflow-x:auto;padding-top:18px">${tl}</div></details>
 
     <div style="padding:30px 0 0;border-top:none">
-      ${kicker('Root cause · three steps')}
+      ${kicker('Root cause')}
       <div style="display:flex;flex-direction:column;gap:20px;max-width:60ch">${r3Block(l)}</div>
       ${concluded?`
       <div style="padding:20px 0 0;margin-top:20px;border-top:1px solid var(--color-divider)">
