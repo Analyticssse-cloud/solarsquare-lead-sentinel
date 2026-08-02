@@ -918,7 +918,16 @@ async function recPick(input,leadId){
     const r=await fetch('/api/recording?lead='+encodeURIComponent(leadId)+'&name='+encodeURIComponent(f.name),
       {method:'POST',headers:Object.assign({'Content-Type':f.type||'application/octet-stream'},authHeaders()),body:f});
     if(r.ok){const j=await r.json();rec.remote=true;rec.url=j.url;try{await idbPut(leadId,{name:f.name,size:f.size,url:j.url,at:rec.at});}catch(e){}}
-    else if(r.status===404)rec.noServer=true;
+    else{
+      // 501 = no blob store on this deployment. The file is safe in IndexedDB, but it is
+      // on THIS DEVICE ONLY — say so, because a silent local-only save looks identical to
+      // a successful upload and the TL would never know Quality cannot hear the call.
+      const j=await r.json().catch(()=>({}));
+      rec.localOnly=true;
+      rec.warn=r.status===501?'Saved on this device only — recording storage is not set up, so an auditor cannot hear this call.'
+        :('Upload failed ('+(j.error||('HTTP '+r.status))+') — saved on this device only.');
+      if(r.status===404)rec.noServer=true;
+    }
   }catch(e){}
   S.recBusy=null;render();
 }
@@ -932,6 +941,7 @@ function recordingBlock(l){
   if(r)return `<div style="padding:16px 0;border-bottom:1px solid var(--color-divider);display:flex;flex-direction:column;gap:10px">
     <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap">${head}<span style="flex:1"></span><span style="font-size:11.5px;color:${MUT(42)}">${esc(r.name)} · ${kb(r.size)} · ${r.remote?'uploaded':'on this device'}</span><button onclick="recDrop('${l.id}')" style="background:none;border:none;cursor:pointer;font-size:11.5px;color:${MUT(52)};text-decoration:underline;padding:0;font-family:inherit">Remove</button></div>
     <audio controls preload="metadata" src="${esc(r.url)}" style="width:100%;height:34px"></audio>
+    ${r.warn?`<div style="font-size:11.5px;color:var(--color-accent-2-800);background:var(--color-accent-2-100);padding:8px 11px;border-radius:2px">${esc(r.warn)}</div>`:''}
   </div>`;
   return `<div style="padding:16px 0;border-bottom:1px solid var(--color-divider);display:flex;align-items:center;gap:14px">${head}
     <span style="flex:1"></span>
