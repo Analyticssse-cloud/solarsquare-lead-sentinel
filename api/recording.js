@@ -9,6 +9,8 @@
 //
 // GET /api/recording?lead=<id> returns { files: [...] } listed from the blob store.
 
+const { findBlobToken } = require('./_blob-token');
+
 const MAX_BYTES = 60 * 1024 * 1024; // 60 MB — well past a 60-min mono call
 
 const OK_EXT = ['mp3','wav','m4a','aac','ogg','oga','opus','flac','wma','amr','3gp','webm','mp4','caf','aiff','aif'];
@@ -35,33 +37,48 @@ module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Headers', 'Authorization,Content-Type');
   if (req.method === 'OPTIONS') return res.status(200).end();
 
-  const token = process.env.BLOB_READ_WRITE_TOKEN;
+  const token = findBlobToken().token;
   const lead = safe((req.query && req.query.lead) || '');
   if (!lead) return res.status(400).json({ error: 'lead is required' });
 
-  if (!token) {
-    return res.status(501).json({
-      error: 'no_blob_store',
-      message: 'Server-side recording storage is not configured. Add a Vercel Blob store and set BLOB_READ_WRITE_TOKEN. Until then recordings stay on this device only.',
-    });
-  }
-
+  // ---- GET: listing is never an error -------------------------------------
+  // A lead with no recording and a deployment with no blob store used to return the
+  // same 501, so the audit card could not tell "nothing attached" from "storage down"
+  // — and it fires this lookup for every RCA on screen. GET now always answers 200
+  // with a files array; `configured` carries the storage state for diagnostics.
   if (req.method === 'GET') {
+    if (!token) return res.status(200).json({ files: [], configured: false });
     try {
       const r = await fetch('https://blob.vercel-storage.com?prefix=' + encodeURIComponent('recordings/' + lead + '/'), {
         headers: { authorization: 'Bearer ' + token, 'x-api-version': '7' },
       });
+      if (!r.ok) {
+        return res.status(200).json({ files: [], configured: true, storeError: r.status });
+      }
       const j = await r.json();
       const files = (j.blobs || []).map(b => ({
         url: b.url, name: String(b.pathname || '').split('/').pop(), size: b.size, at: b.uploadedAt,
       }));
-      return res.status(200).json({ files });
+      return res.status(200).json({ files, configured: true });
     } catch (err) {
-      return res.status(500).json({ error: String(err.message || err) });
+      return res.status(200).json({ files: [], configured: true, storeError: String(err.message || err) });
     }
   }
 
   if (req.method !== 'POST') return res.status(405).json({ error: 'method_not_allowed' });
+
+  // ---- POST: an upload genuinely cannot proceed without a store ------------
+  if (!token) {
+    return res.status(501).json({
+      error: 'no_blob_store',
+      env: process.env.VERCEL_ENV || 'unknown',
+      message: 'Recording storage is not configured for this deployment (' +
+               (process.env.VERCEL_ENV || 'unknown') + '). Connect a Vercel Blob store to the ' +
+               'project, tick its *_READ_WRITE_TOKEN for this environment, and REDEPLOY — ' +
+               'environment variables are only picked up at build time. Until then recordings ' +
+               'stay on this device only.',
+    });
+  }
 
   try {
     const name = safe((req.query && req.query.name) || 'recording');
