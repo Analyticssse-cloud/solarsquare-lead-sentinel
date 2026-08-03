@@ -27,6 +27,11 @@ const HEADER = [
   // audio was written to blob storage and then orphaned — nothing in the log pointed
   // at it, so a Quality auditor opening the RCA had no way to hear the call.
   'recording_url', 'recording_name',
+  // The Quality auditor's verdict, written back onto the SAME (audit_date, lead_id) key.
+  // Until these existed, "Needs rework" lived in the auditor's browser: the TL who had to
+  // redo the RCA never saw it and no scorecard could count it.
+  'review_verdict', 'review_note', 'reassigned_to',
+  'reviewer_email', 'reviewer_name', 'reviewed_at',
 ];
 
 const clean = v => String(v === undefined || v === null ? '' : v).replace(/[\r\n\t]+/g, ' ').slice(0, 900);
@@ -99,6 +104,9 @@ module.exports = async (req, res) => {
       clean(i.reason), clean(i.severity), clean(i.action), clean(i.note),
       clean(i.why_path), clean(i.assignee),
       clean(i.what), clean(i.why), clean(i.owner), clean(i.fault), clean(i.action_status || 'open'),
+      clean(i.recording_url), clean(i.recording_name),
+      clean(i.review_verdict), clean(i.review_note), clean(i.reassigned_to),
+      clean(i.reviewer_email), clean(i.reviewer_name), clean(i.reviewed_at),
     ]);
     const n = await appendRows(RCA_TAB, rows);
     return res.status(200).json({ ok: true, logged: n });
