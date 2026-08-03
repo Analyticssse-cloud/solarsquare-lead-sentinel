@@ -24,14 +24,14 @@
   .ls-cat:hover{background:color-mix(in srgb,var(--color-text) 4%,transparent)}
   .ls-badge{display:inline-flex;align-items:center;gap:6px;font-size:10.5px;letter-spacing:.07em;
             text-transform:uppercase;font-weight:600;padding:3px 9px;border-radius:2px;white-space:nowrap;line-height:1.5}
-  .ls-bar{display:block;height:3px;width:100%;background:color-mix(in srgb,var(--color-text) 11%,transparent);
+  .ls-bar{display:block;height:5px;width:100%;background:color-mix(in srgb,var(--color-text) 9%,transparent);
           border-radius:999px;overflow:hidden}
   .ls-bar>i{display:block;height:100%;border-radius:999px;transition:width .45s cubic-bezier(.2,.7,.3,1)}
   .ls-lift{transition:box-shadow .15s ease,transform .15s ease}
   .ls-lift:hover{box-shadow:var(--shadow-md)}
   .ls-btn{cursor:pointer;font-family:inherit;border-radius:2px;transition:background .13s ease,color .13s ease,border-color .13s ease}
-  .ls-btn-solid{border:1px solid var(--color-text);background:var(--color-text);color:var(--color-bg)}
-  .ls-btn-solid:hover{background:var(--color-accent);border-color:var(--color-accent)}
+  .ls-btn-solid{border:1px solid var(--color-accent);background:var(--color-accent);color:#fff}
+  .ls-btn-solid:hover{background:var(--color-accent-600);border-color:var(--color-accent-600)}
   .ls-btn-ghost{border:1px solid color-mix(in srgb,var(--color-text) 22%,transparent);background:none;color:var(--color-text)}
   .ls-btn-ghost:hover{border-color:var(--color-accent);color:var(--color-accent-700)}
   button:focus-visible,select:focus-visible,input:focus-visible,textarea:focus-visible,a:focus-visible{
@@ -1347,7 +1347,7 @@ function mtdView(){
       hero(pct+'%','Audits done till date',sum.done+' of '+sum.exp+' expected',pct>=90?'var(--color-accent)':pct<70?'var(--color-accent-2)':'')+
       hero(closure==null?'\u2014':closure+'%','Actions closed',sum.act?sum.cl+' of '+sum.act+' assigned':'no actions raised yet')+
       hero(repAll+'%','Repeat findings','same LRM, same root cause',repAll>=30?'var(--color-accent-2)':'')+
-      hero(accPct==null?'\u2014':accPct+'%','RCAs accepted on review',qsum.rev?qsum.acc+' of '+qsum.rev+' reviewed \u00b7 '+qsum.rew+' sent back':'nothing reviewed yet',accPct!=null&&accPct<80?'var(--color-accent-2)':'')+
+      hero(accPct==null?'\u2014':accPct+'%','RCAs accepted on review',qsum.rev?qsum.acc+' of '+qsum.rev+' reviewed \u00b7 '+qsum.rew+' sent back':'nothing reviewed yet',accPct!=null&&accPct<70?'var(--color-accent-2)':'')+
     '</div>'+
     (empty?'<div style="font-size:14.5px;line-height:1.6;color:'+MUT(50)+';max-width:60ch;padding-bottom:40px">No RCAs have been logged this month yet, so there is nothing to score. The board fills in as team leads submit.</div>':'')+
     '<div style="display:flex;align-items:baseline;gap:26px;flex-wrap:wrap;padding-bottom:16px">'+lvlBtn+'</div>'+

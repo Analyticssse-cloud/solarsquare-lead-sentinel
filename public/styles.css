@@ -2,44 +2,49 @@
 @import url('https://fonts.googleapis.com/css2?family=Caprasimo:wght@400&family=Figtree:wght@400;600;700&display=swap');
 
 :root {
-  --color-bg: #f4f6f9;
-  --color-surface: #e8eef5;
-  --color-text: #142238;
-  --color-accent: #2379c6;
-  --color-accent-2: #eda012;
-  --color-divider: color-mix(in srgb, #142238 15%, transparent);
+  /* SolarSquare brand, sampled from the mark: deep indigo ink + the bright sky blue.
+     The previous palette sat between the two (a mid grey-blue on a grey ground with a
+     muddy gold second accent), which is what read as dull — nothing on screen was ever
+     fully saturated. Paper is now white so the azure and the crimson have something to
+     sit against. */
+  --color-bg: #ffffff;
+  --color-surface: #f0f6fe;
+  --color-text: #0e1a4d;
+  --color-accent: #0a86e0;
+  --color-accent-2: #e81852;
+  --color-divider: color-mix(in srgb, #0e1a4d 13%, transparent);
 
-  /* Tonal ramps — SolarSquare brand: process blue primary, solar-gold second,
-     on a cool neutral ground drawn from the logo. */
-  --color-neutral-100: #f4f6f9;
-  --color-neutral-200: #e6eaf1;
-  --color-neutral-300: #cfd6e1;
-  --color-neutral-400: #adb8c8;
-  --color-neutral-500: #8894a7;
-  --color-neutral-600: #687488;
-  --color-neutral-700: #4d5869;
-  --color-neutral-800: #353f4d;
-  --color-neutral-900: #202836;
+  /* Tonal ramps — brand azure primary, crimson for breach and urgency, on a cool
+     indigo-tinted neutral scale. */
+  --color-neutral-100: #f6f8fc;
+  --color-neutral-200: #e7ecf6;
+  --color-neutral-300: #ccd5e8;
+  --color-neutral-400: #a3b0cd;
+  --color-neutral-500: #7b8bad;
+  --color-neutral-600: #5b6b8e;
+  --color-neutral-700: #42506e;
+  --color-neutral-800: #2a3557;
+  --color-neutral-900: #16204a;
 
-  --color-accent-100: #e8f1fb;
-  --color-accent-200: #c8ddf4;
-  --color-accent-300: #9dc3ea;
-  --color-accent-400: #5f9bd8;
-  --color-accent-500: #2379c6;
-  --color-accent-600: #1668b3;
-  --color-accent-700: #114f89;
-  --color-accent-800: #0d3c66;
-  --color-accent-900: #0a2b49;
+  --color-accent-100: #e2f2ff;
+  --color-accent-200: #b9e2ff;
+  --color-accent-300: #7fcbfb;
+  --color-accent-400: #33aef3;
+  --color-accent-500: #0a86e0;
+  --color-accent-600: #0a6cc4;
+  --color-accent-700: #0f549f;
+  --color-accent-800: #123f7d;
+  --color-accent-900: #14285c;
 
-  --color-accent-2-100: #fdf2d9;
-  --color-accent-2-200: #f9e0a6;
-  --color-accent-2-300: #f5c968;
-  --color-accent-2-400: #f1b234;
-  --color-accent-2-500: #eda012;
-  --color-accent-2-600: #cf8410;
-  --color-accent-2-700: #9f6410;
-  --color-accent-2-800: #744910;
-  --color-accent-2-900: #4d310c;
+  --color-accent-2-100: #ffe7ec;
+  --color-accent-2-200: #ffc6d2;
+  --color-accent-2-300: #ff98ad;
+  --color-accent-2-400: #fb5c81;
+  --color-accent-2-500: #e81852;
+  --color-accent-2-600: #c60f45;
+  --color-accent-2-700: #a30c39;
+  --color-accent-2-800: #7f0a2d;
+  --color-accent-2-900: #570620;
 
   --font-heading: "Caprasimo", system-ui, sans-serif;
   --font-heading-weight: 400;
@@ -58,9 +63,9 @@
 
   /* Elevation — derived from the ground: soft ink-tinted shadows on a
      light theme, a hairline edge + ambient darkness on a dark one. */
-  --shadow-sm: 0 1px 2px color-mix(in srgb, #2e2b25 14%, transparent);
-  --shadow-md: 0 3px 10px color-mix(in srgb, #2e2b25 16%, transparent);
-  --shadow-lg: 0 12px 32px color-mix(in srgb, #2e2b25 22%, transparent);
+  --shadow-sm: 0 1px 2px color-mix(in srgb, #0e1a4d 12%, transparent);
+  --shadow-md: 0 3px 12px color-mix(in srgb, #0e1a4d 14%, transparent);
+  --shadow-lg: 0 14px 34px color-mix(in srgb, #0e1a4d 20%, transparent);
 }
 
 body {
