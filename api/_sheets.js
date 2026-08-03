@@ -40,7 +40,12 @@ async function readQueueSheet(range) {
   return res.data.values || [];
 }
 
-// Create the tab if it doesn't exist yet, and write the header row. Idempotent.
+// Create the tab if it doesn't exist yet, and keep its header row in step with the code.
+// This second part matters: the header used to be written ONCE, at creation. Columns were
+// added to the code's header afterwards, so appended rows carried more fields than the
+// stored header row named — and every read came back shifted (a root cause reading as the
+// TL's name). Rows are always appended in the code's header order, so the fix is to make
+// row 1 say so. Idempotent.
 async function ensureTab(title, header) {
   if (!WRITE_SHEET_ID) throw new Error('no_write_sheet');
   const auth   = getAuth(false);
@@ -54,10 +59,12 @@ async function ensureTab(title, header) {
     });
   }
   const first = await sheets.spreadsheets.values.get({
-    spreadsheetId: WRITE_SHEET_ID, range: title + '!A1:Z1',
+    spreadsheetId: WRITE_SHEET_ID, range: title + '!A1:BZ1',
   }).catch(() => ({ data: {} }));
   const have = (first.data && first.data.values && first.data.values[0]) || [];
-  if (!have.length) {
+  const same = have.length === header.length
+            && have.every((h, i) => String(h).trim() === header[i]);
+  if (!same) {
     await sheets.spreadsheets.values.update({
       spreadsheetId: WRITE_SHEET_ID, range: title + '!A1',
       valueInputOption: 'RAW', requestBody: { values: [header] },

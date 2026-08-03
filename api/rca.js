@@ -36,6 +36,22 @@ const HEADER = [
 
 const clean = v => String(v === undefined || v === null ? '' : v).replace(/[\r\n\t]+/g, ' ').slice(0, 900);
 
+// Rows are always appended in HEADER order, so read them positionally against HEADER
+// rather than trusting the sheet's first row: a tab created before a column was added
+// still carries the old header, and pairing that with newer rows shifted every field
+// (the root cause came back reading as the TL's name). ensureTab repairs row 1; this
+// makes the read correct regardless.
+function rowsToObjects(rows) {
+  if (!rows || !rows.length) return [];
+  const first = (rows[0] || []).map(c => String(c).trim().toLowerCase());
+  const body = first.indexOf('lead_id') >= 0 ? rows.slice(1) : rows;
+  return body.filter(r => r && r.length).map(r => {
+    const o = {};
+    HEADER.forEach((h, i) => { o[h] = r[i] !== undefined ? r[i] : ''; });
+    return o;
+  });
+}
+
 function readBody(req) {
   if (req.body && typeof req.body === 'object') return Promise.resolve(req.body);
   return new Promise(resolve => {
@@ -73,7 +89,9 @@ module.exports = async (req, res) => {
     if (req.method === 'GET') {
       const days = Math.min(120, Math.max(1, parseInt((req.query && req.query.days) || '45', 10) || 45));
       const cut = new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
-      const all = toObjects(await readWriteSheet(RCA_TAB).catch(() => []));
+      const all = rowsToObjects(await readWriteSheet(RCA_TAB).catch(() => []));
+      // Bring a stale header row back in line for everyone reading the sheet directly.
+      ensureTab(RCA_TAB, HEADER).catch(() => {});
       // keep only the newest submission per lead per audit date
       const latest = new Map();
       all.forEach(r => {
