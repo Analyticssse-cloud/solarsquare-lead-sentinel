@@ -322,6 +322,15 @@ function sampleData(role){
       what:pk.what,why:pk.why,
       owner:OWNERS[i%OWNERS.length][0],
       fault:(i%3===0)?'system':'coachable',
+      // The demo has to show the review loop actually closed: most RCAs accepted, a few
+      // sent back, some still unreviewed — otherwise every quality score reads “not
+      // reviewed yet” and the screen teaches nothing.
+      review_verdict:(i%9===0)?'rework':(i%3===2)?'':'accept',
+      review_note:(i%9===0)?'The why stops at “LRM was busy”. Take it down to why the follow-up was never scheduled in the first place.':'',
+      reviewer_email:(i%3===2)?'':'quality@solarsquare.in',
+      reviewer_name:(i%3===2)?'':'Quality audit',
+      reviewed_at:(i%3===2)?'':iso(0),
+      reassigned_to:'',
       action_status:(i%4===0)?'done':'open'});
   });
   return{queue,hierarchy,rcaLog,role,
@@ -344,7 +353,10 @@ function applySample(role){
   S.auditRaw=data.queue[0].audit_date;S.auditDate=fmtLongDate(data.queue[0].audit_date);
   S.rcaLog=data.rcaLog||[];S.audits={};
   S.rcaLog.forEach(x=>{S.audits[x.lead_id]={reason:x.reason,sev:x.severity,note:x.note||'',
-    action:x.action,submitted:true,at:''};});
+    action:x.action,submitted:String(x.review_verdict||'')!=='rework',at:''};});
+  S.rcaReview={};
+  S.rcaLog.forEach(x=>{if(x.review_verdict)S.rcaReview[String(x.audit_date||'').slice(0,10)+'|'+x.lead_id]=
+    {verdict:x.review_verdict,note:x.review_note||'',assignee:x.reassigned_to||'',notified:!!x.reassigned_to,by:x.reviewer_name||'',saved:true};});
   buildModel(data.queue,data.hierarchy);
   S.screen=role==='admin'?'mgr':'queue';
   render();
@@ -391,7 +403,7 @@ async function load(){
   S.auditRaw=String((data.queue&&data.queue[0]&&data.queue[0].audit_date)||'').slice(0,10);
   S.auditDate=fmtLongDate((data.queue&&data.queue[0]&&data.queue[0].audit_date)||'');
   S.user=data.user||sess||null;
-  S.meEmail=data.meEmail||null;
+  S.meEmail=norm(data.meEmail||'')||null;
   S.unmapped=data.unmappedLrms||[];
   S.mapping=data.mappingOverrides||null;
   buildModel(data.queue||[],data.hierarchy||[]);
@@ -407,9 +419,16 @@ async function load(){
 function buildModel(queue,hier){
   const H={};hier.forEach(h=>H[norm(h.lrm_email)]=h);
   const base={mcch_past:45,followup_missed:40,not_interested:52,not_qualified:52,mcch_future:34};
-  const leadsByTl={},tlMeta={};
+  const leadsByTl={},tlMeta={},tlByName={};
   queue.forEach(row=>{
-    const h=H[norm(row.lrm_email)]||{};const tl=h.tl_email||'unassigned';
+    const h=H[norm(row.lrm_email)]||{};
+    // One team lead, one row. The mapping sheet carries the same person under more than
+    // one address (@homes vs @solarsquare, stray casing) and occasionally a second
+    // spelling of the name — which is why Team progress listed the same TL twice. Key on
+    // the normalised email, then collapse on the name.
+    let tl=norm(h.tl_email)||'unassigned';
+    const nk=String(h.tl_name||'').trim().toLowerCase();
+    if(nk){if(tlByName[nk])tl=tlByName[nk];else tlByName[nk]=tl;}
     const urg=Math.max(20,Math.min(100,base[row.category]+(row.days_overdue||0)*8));
     const cname=row.customer_name||('Lead '+row.lead_id);
     const lead={id:row.lead_id,cat:row.category,name:cname,loc:row.cluster,
@@ -484,7 +503,13 @@ const TLS=()=>S.model?S.model.tls:[];
 // breach has stood plus how long the lead has been silent). No synthetic score, no tiers.
 function catLeads(k){return L().filter(l=>l.cat===k).slice()
   .sort((a,b)=>(b.key-a.key)||(b.silent-a.silent)||(b.days-a.days)||String(a.name).localeCompare(String(b.name)));}
-const rcaDone=id=>{const a=S.audits[id];if(a&&a.submitted)return true;const t=S.auditRaw||'';return (S.rcaLog||[]).some(x=>x.lead_id===id&&String(x.audit_date||'')===t);};
+// The log row for a lead on a given audit day — the one place review state lives.
+function logRow(leadId,date){const t=date||S.auditRaw||'';
+  return (S.rcaLog||[]).find(x=>String(x.lead_id)===String(leadId)&&String(x.audit_date||'').slice(0,10)===t)||null;}
+// An RCA the Quality auditor sent back is not done. Resubmitting appends a fresh row with
+// no verdict on it, so the lead closes again the moment the TL redoes the work.
+const reworkOf=id=>{const r=logRow(id);return r&&String(r.review_verdict||'')==='rework'?r:null;};
+const rcaDone=id=>{if(reworkOf(id))return false;const a=S.audits[id];if(a&&a.submitted)return true;return !!logRow(id);};
 const audited=()=>L().filter(l=>rcaDone(l.id)).length;
 function myTlName(){const t=TLS().find(x=>x.me)||TLS().find(x=>x.email===S.tlEmail);return t?t.name:'You';}
 
@@ -564,13 +589,27 @@ async function loadRcaLog(){
     S.rcaLog=Array.isArray(j.rows)?j.rows:[];
     // rehydrate my own RCAs for today so a reload doesn't look like unfinished work
     const today=S.auditRaw||'';
-    S.rcaLog.forEach(x=>{if(String(x.audit_date||'')===today&&x.lead_id&&!S.audits[x.lead_id])
-      S.audits[x.lead_id]={reason:x.reason||'',sev:x.severity||'',note:x.note||'',action:x.action||'No action needed',owner:x.owner||'lrm',fault:x.fault||'coachable',submitted:true,at:''};});
+    S.rcaLog.forEach(x=>{
+      const d=String(x.audit_date||'').slice(0,10),back=String(x.review_verdict||'')==='rework';
+      if(d===today&&x.lead_id&&!S.audits[x.lead_id])
+        S.audits[x.lead_id]={reason:x.reason||'',sev:x.severity||'',note:x.note||'',action:x.action||'No action needed',owner:x.owner||'lrm',fault:x.fault||'coachable',submitted:!back,at:''};
+      // A rework verdict reopens the draft, so the TL can edit rather than stare at a
+      // submitted card they are being told to redo.
+      else if(d===today&&back&&S.audits[x.lead_id])S.audits[x.lead_id].submitted=false;
+      // Verdicts are shared state: an auditor reloading, or a second auditor opening the
+      // same queue, must see the same accepted/rework marks.
+      if(x.review_verdict){const k=d+'|'+x.lead_id;
+        S.rcaReview[k]=Object.assign({verdict:x.review_verdict,note:x.review_note||'',
+          assignee:x.reassigned_to||'',notified:!!x.reassigned_to,
+          by:x.reviewer_name||nameFromEmail(x.reviewer_email||''),at:x.reviewed_at||'',saved:true},S.rcaReview[k]);}
+    });
     render();
   }catch(e){}
 }
 // per-team completion, straight off the shared log
-function doneByTl(tlEmail){const t=S.auditRaw||'';return (S.rcaLog||[]).filter(x=>String(x.audit_date||'')===t&&norm(x.tl_email)===norm(tlEmail)).length;}
+function doneByTl(tlEmail){const t=S.auditRaw||'';return (S.rcaLog||[]).filter(x=>String(x.audit_date||'')===t&&norm(x.tl_email)===norm(tlEmail)&&String(x.review_verdict||'')!=='rework').length;}
+// Sent back by the auditor today — work that has to be done again, so it is not "done".
+function reworkByTl(tlEmail){const t=S.auditRaw||'';return (S.rcaLog||[]).filter(x=>String(x.audit_date||'')===t&&norm(x.tl_email)===norm(tlEmail)&&String(x.review_verdict||'')==='rework').length;}
 function mtdStats(){
   const rows=S.rcaLog||[],me=norm((S.user&&S.user.email)||'');
   const mon=(S.auditRaw||new Date().toISOString().slice(0,10)).slice(0,7);
@@ -597,6 +636,29 @@ async function setActionStatus(auditDate,leadId,status){
       body:JSON.stringify({items:[next]})});
   }catch(e){S.rcaErr='offline';}
   S.actBusy='';render();
+}
+// The auditor's verdict goes the same way: re-post the whole row with the review fields on
+// it. This is what makes "Needs rework" mean something — the TL's queue reopens the lead
+// and the scorecard can finally say whether an RCA was any good.
+async function saveReview(subId){
+  const p=String(subId).split('|'),date=p[0],leadId=p[1];
+  const src=(S.rcaLog||[]).find(function(x){
+    return String(x.audit_date||'').slice(0,10)===date&&String(x.lead_id)===String(leadId);});
+  if(!src)return;
+  const r=S.rcaReview[subId]||{};
+  const next=Object.assign({},src,{review_verdict:r.verdict||'',review_note:r.note||'',
+    reassigned_to:r.assignee||'',reviewer_email:(S.user&&S.user.email)||'',
+    reviewer_name:(S.user&&S.user.name)||'',reviewed_at:new Date().toISOString()});
+  S.rcaLog=(S.rcaLog||[]).map(function(x){return x===src?next:x;});
+  if(SAMPLE){patchRv(subId,{saved:true});render();return;}
+  S.revBusy=subId;render();
+  try{
+    const res=await fetch('/api/rca',{method:'POST',headers:Object.assign({'Content-Type':'application/json'},authHeaders()),
+      body:JSON.stringify({items:[next]})});
+    if(!res.ok){const j=await res.json().catch(function(){return{};});S.rcaErr=j.message||j.error||('HTTP '+res.status);}
+    else{S.rcaErr='';patchRv(subId,{saved:true});}
+  }catch(e){S.rcaErr='offline';}
+  S.revBusy='';render();
 }
 function mtdMonth(){return (S.auditRaw||new Date().toISOString().slice(0,10)).slice(0,7);}
 function tlLines(){
@@ -639,7 +701,7 @@ function mtdBoard(level){
       tl[te]={key:te,name:l.tl||nameFromEmail(te)||'Unassigned',cluster:l.cluster||'',
         ados_email:l.ados_email||'unmapped',ados:l.ados||'Unmapped',
         zsm_email:l.zsm_email||'unmapped',zsm:l.zsm||'Unmapped',
-        raw:0,actions:0,closed:0,pairs:{}};}
+        raw:0,actions:0,closed:0,reviewed:0,acc:0,rew:0,deep:0,pairs:{}};}
     return tl[te];};
   // seed every TL that exists, not only those who logged something — a team that did
   // nothing all month is the row a manager most needs to see.
@@ -652,6 +714,11 @@ function mtdBoard(level){
     e.raw++;
     const act=String(x.action||'');
     if(act&&act!=='No action needed'){e.actions++;if(String(x.action_status||'')==='done')e.closed++;}
+    // Quality, measured from what people actually did: the auditor's verdict, and whether
+    // the five-whys was walked to a real root cause or stopped at the first answer.
+    const vd=String(x.review_verdict||'');
+    if(vd==='accept'||vd==='rework'){e.reviewed++;if(vd==='accept')e.acc++;else e.rew++;}
+    if(String(x.why_path||'').split('\u2192').filter(function(s){return s.trim();}).length>=3)e.deep++;
     const p=norm(x.lrm_email||'')+'|'+String(x.reason||'');e.pairs[p]=(e.pairs[p]||0)+1;
   });
   // clamp here, once: a TL cannot clear more than the queue issued them
@@ -667,16 +734,26 @@ function mtdBoard(level){
     const key=level==='tl'?te:level==='ados'?e.ados_email:e.zsm_email;
     const nm =level==='tl'?e.name:level==='ados'?e.ados:e.zsm;
     const g=out[key]=out[key]||{key:key,name:nm,cluster:level==='tl'?e.cluster:'',
-      teams:0,done:0,raw:0,actions:0,closed:0,rep:0};
+      teams:0,done:0,raw:0,actions:0,closed:0,rep:0,reviewed:0,acc:0,rew:0,deep:0};
     g.teams++;g.done+=e.done;g.raw+=e.raw;g.actions+=e.actions;g.closed+=e.closed;g.rep+=e.rep;
+    g.reviewed+=e.reviewed;g.acc+=e.acc;g.rew+=e.rew;g.deep+=e.deep;
   });
   return Object.keys(out).map(function(k){
     const g=out[k],expected=capPerTl*Math.max(1,g.teams);
+    const closure=g.actions?Math.round(g.closed/g.actions*100):null;
+    const repeat=g.raw?Math.min(100,Math.round(g.rep/g.raw*100)):0;
+    const acceptance=g.reviewed?Math.round(g.acc/g.reviewed*100):null;
+    const depth=g.raw?Math.round(g.deep/g.raw*100):0;
+    // One number for "is the RCA work any good": mostly whether the auditor accepted it,
+    // then whether the action it raised was actually closed, then whether the analysis went
+    // deep, then whether the same failure keeps coming back. Null until someone reviews.
+    const quality=g.reviewed
+      ? Math.max(0,Math.min(100,Math.round(0.45*acceptance+0.25*(closure==null?100:closure)+0.15*depth+0.15*(100-repeat))))
+      : null;
     return{key:g.key,name:g.name,cluster:g.cluster,teams:g.teams,done:g.done,expected:expected,days:issuedDays,
       completion:expected?Math.min(100,Math.round(g.done/expected*100)):0,
-      actions:g.actions,closed:g.closed,
-      closure:g.actions?Math.round(g.closed/g.actions*100):null,
-      repeat:g.raw?Math.min(100,Math.round(g.rep/g.raw*100)):0};
+      actions:g.actions,closed:g.closed,closure:closure,repeat:repeat,
+      reviewed:g.reviewed,accepted:g.acc,rework:g.rew,acceptance:acceptance,depth:depth,quality:quality};
   }).sort(function(a,b){return b.completion-a.completion||b.done-a.done;});
 }
 function rootFreq(){
@@ -690,14 +767,46 @@ function rootFreq(){
   all.forEach(function(r){r.share=Math.round(r.n/tot*1000)/10;});
   return all;
 }
+// Actions are scoped to who is asking: a TL sees the actions raised against their own
+// team (that is the whole point of the tab — checking the assigned action got done), a
+// manager sees their line, admin sees everything.
+function actionScope(){
+  const sc=mtdScope(),lines=tlLines().line;
+  const me=norm((S.user&&S.user.email)||S.meEmail||'');
+  return function(te){
+    if(isTL())return te===me;
+    if(!sc)return true;
+    const l=lines[te];if(!l)return false;
+    if(sc.role==='zsm')return l.zsm_email===sc.me;
+    if(sc.role==='ados')return l.ados_email===sc.me;
+    return true;};
+}
+const dAgo=d=>{const t=Date.parse(String(d)+'T12:00:00Z');return isNaN(t)?0:Math.max(0,Math.floor((Date.now()-t)/86400000));};
 function actionRows(){
-  const mon=mtdMonth();
+  const mon=mtdMonth(),ok=actionScope();
   return (S.rcaLog||[]).filter(function(x){
-    return String(x.audit_date||'').slice(0,7)===mon&&x.action&&x.action!=='No action needed';})
-    .map(function(x){return{date:String(x.audit_date||'').slice(0,10),lead:x.lead_id,cat:x.category,
+    return String(x.audit_date||'').slice(0,7)===mon&&x.action&&x.action!=='No action needed'
+      &&ok(norm(x.tl_email||''));})
+    .map(function(x){const d=String(x.audit_date||'').slice(0,10);
+      return{date:d,lead:x.lead_id,name:x.customer_name||x.lead_id,cat:x.category,
       lrm:x.lrm_name||x.lrm_email,tl:x.tl_name||x.tl_email,root:x.reason,action:x.action,
       owner:(OWNERS.find(function(o){return o[0]===x.owner;})||['',x.owner||''])[1],
-      fault:x.fault||'',status:String(x.action_status||'open')==='done'?'Done':'Open'};});
+      fault:x.fault||'',verdict:String(x.review_verdict||''),age:dAgo(d),
+      status:String(x.action_status||'open')==='done'?'Done':'Open'};})
+    .sort(function(a,b){return String(b.date).localeCompare(String(a.date));});
+}
+// RCAs the Quality auditor sent back — the TL's rework list.
+function reworkList(){
+  const mon=mtdMonth(),ok=actionScope();
+  return (S.rcaLog||[]).filter(function(x){
+    return String(x.audit_date||'').slice(0,7)===mon&&String(x.review_verdict||'')==='rework'
+      &&ok(norm(x.tl_email||''));})
+    .map(function(x){const d=String(x.audit_date||'').slice(0,10);
+      return{date:d,lead:x.lead_id,name:x.customer_name||x.lead_id,
+      lrm:x.lrm_name||x.lrm_email||'',tl:x.tl_name||x.tl_email||'',root:x.reason||'',
+      note:x.review_note||'',by:x.reviewer_name||nameFromEmail(x.reviewer_email||''),
+      assignee:x.reassigned_to||'',live:d===(S.auditRaw||'')};})
+    .sort(function(a,b){return String(b.date).localeCompare(String(a.date));});
 }
 // ---- CSV export (admin) ----
 const csvCell=v=>{const s=String(v==null?'':v);return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s;};
@@ -707,20 +816,29 @@ function download(name,text){
   const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download=name;
   document.body.appendChild(a);a.click();setTimeout(function(){URL.revokeObjectURL(a.href);a.remove();},400);
 }
+// One file per question, and only the columns that answer it. The old MTD export stacked
+// all three reporting levels into one sheet with a `level` column, which is what made it
+// unreadable — it now exports the level you are looking at.
 function exportCsv(kind){
-  const mon=mtdMonth();
+  const mon=mtdMonth(),lvl=S.mtdLvl||'tl';
+  const lvlName=lvl==='tl'?'team_lead':lvl==='ados'?'ados':'zsm';
   if(kind==='mtd'){
-    const rows=[];
-    [['TL','tl'],['ADOS','ados'],['ZSM','zsm']].forEach(function(lv){
-      mtdBoard(lv[1]).forEach(function(r){rows.push([lv[0],r.name,r.cluster,r.teams,r.days,r.expected,r.done,
-        r.completion+'%',r.actions,r.closed,r.closure==null?'':r.closure+'%',r.repeat+'%']);});});
-    download('mtd-summary-'+mon+'.csv',csvOf(
-      ['level','name','cluster','teams','days_issued','expected_audits','audits_done','completion',
-       'actions_assigned','actions_closed','action_closure','repeat_rate'],rows));
+    download('rca-completion-'+lvlName+'-'+mon+'.csv',csvOf(
+      [lvlName,'cluster','days_issued','expected','done','completion_pct'],
+      mtdBoard(lvl).map(function(r){return [r.name,r.cluster,r.days,r.expected,r.done,r.completion];})));
+  } else if(kind==='quality'){
+    // The measurable answer to "is the RCA work any good": one row per TL, no prose.
+    download('rca-quality-'+mon+'.csv',csvOf(
+      ['team_lead','cluster','rcas_logged','reviewed','accepted','sent_back',
+       'acceptance_pct','root_cause_depth_pct','actions_assigned','actions_closed',
+       'action_closure_pct','repeat_finding_pct','quality_score'],
+      mtdBoard('tl').map(function(r){return [r.name,r.cluster,r.done,r.reviewed,r.accepted,r.rework,
+        r.acceptance==null?'':r.acceptance,r.depth,r.actions,r.closed,
+        r.closure==null?'':r.closure,r.repeat,r.quality==null?'':r.quality];})));
   } else if(kind==='actions'){
-    download('action-tracker-'+mon+'.csv',csvOf(
-      ['audit_date','lead_id','category','lrm','tl','root_cause','action','owner','fault','status'],
-      actionRows().map(function(r){return [r.date,r.lead,r.cat,r.lrm,r.tl,r.root,r.action,r.owner,r.fault,r.status];})));
+    download('actions-'+mon+'.csv',csvOf(
+      ['audit_date','days_old','lead_id','lrm','team_lead','action','owner','status'],
+      actionRows().map(function(r){return [r.date,r.age,r.lead,r.lrm,r.tl,r.action,r.owner,r.status];})));
   } else {
     download('root-causes-'+mon+'.csv',csvOf(
       ['category','root_cause','count','share_pct','coachable','system'],
@@ -782,11 +900,14 @@ function screensFor(){
   // In SAMPLE mode every screen is reachable: a presenter has to be able to walk
   // stakeholders through the queue, the five whys and Submit, then the manager view,
   // without editing the URL mid-sentence.
-  if(SAMPLE)return [['queue','Audit queue'],['adher','My adherence'],['rca','RCA audit'],['mgr','Team progress'],['mtd','MTD score'],['settings','Settings']];
+  if(SAMPLE)return [['queue','Audit queue'],['adher','My adherence'],['actions','Actions taken'],['rca','RCA audit'],['mgr','Team progress'],['mtd','MTD score'],['settings','Settings']];
   const out=[];
-  if(isTL())return [['queue','Audit queue'],['adher','My adherence']];
+  // A TL owns the actions they raised, so they get the tracker too — without it there was
+  // no way for them to check whether an assigned action was ever closed.
+  if(isTL())return [['queue','Audit queue'],['adher','My adherence'],['actions','Actions taken']];
   if(isAud())out.push(['rca','RCA audit']);
   out.push(['mgr','Team progress']);
+  out.push(['actions','Actions taken']);
   if(['admin','zsm','ados'].indexOf(S.role)>=0)out.push(['mtd','MTD score']);
   if(S.role==='admin')out.push(['settings','Settings']);
   return out;
@@ -795,20 +916,20 @@ function screensFor(){
   const allow=screensFor().map(s=>s[0]);
   const scr=allow.includes(S.screen)?S.screen:allow[0];
   S.screen=scr;
-  el.innerHTML=sampleBanner()+nav()+(scr==='queue'?queueView():scr==='adher'?adherView():scr==='rca'?rcaView():scr==='mtd'?mtdView():scr==='settings'?settingsView():mgrView());
+  el.innerHTML=sampleBanner()+nav()+(scr==='queue'?queueView():scr==='adher'?adherView():scr==='actions'?actionsView():scr==='rca'?rcaView():scr==='mtd'?mtdView():scr==='settings'?settingsView():mgrView());
 }
 function nav(){
   const meTl=TLS().find(t=>t.me);
   const uName=(S.user&&(S.user.name||S.user.email))||(meTl&&meTl.name)||'—';
   const roleLbl=ROLE_LABEL[S.role]||'Team Lead';
   const tab=(id,lbl)=>{const on=S.screen===id;
-    return `<button data-act="nav" data-v="${id}" style="background:none;border:none;padding:0 0 6px;cursor:pointer;font-family:var(--font-body);font-size:14.5px;color:${on?'var(--color-text)':MUT(50)};border-bottom:2px solid ${on?'var(--color-text)':'transparent'};font-weight:${on?'600':'400'}">${lbl}</button>`;};
+    return `<button data-act="nav" data-v="${id}" style="background:none;border:none;padding:0 0 6px;cursor:pointer;font-family:var(--font-body);font-size:14.5px;white-space:nowrap;color:${on?'var(--color-text)':MUT(50)};border-bottom:2px solid ${on?'var(--color-text)':'transparent'};font-weight:${on?'600':'400'}">${lbl}</button>`;};
   return `<div class="wrap" style="display:flex;align-items:baseline;flex-wrap:wrap;column-gap:34px;row-gap:10px;padding-top:26px;padding-bottom:12px">
     <span style="display:flex;align-items:baseline;gap:12px;flex:none">
       ${logoImg(24)}
       <span style="font-family:var(--font-heading);font-size:19px;font-weight:700;letter-spacing:-.01em">Lead Review</span>
     </span>
-    <span style="display:flex;gap:26px;align-items:baseline">${screensFor().map(s=>tab(s[0],s[1])).join('')}</span>
+    <span style="display:flex;gap:26px;align-items:baseline;flex-wrap:wrap;row-gap:8px">${screensFor().map(s=>tab(s[0],s[1])).join('')}</span>
     <span style="display:flex;align-items:baseline;flex-wrap:wrap;column-gap:22px;row-gap:6px;font-size:13px;color:${MUT(50)};min-width:0;margin-left:auto;justify-content:flex-end">
       ${isTL()?`<span>Cutoff 7 PM · <span data-timer style="font-variant-numeric:tabular-nums;color:var(--color-text)">${cutoffLeft()}</span></span>`:''}
       <span style="color:var(--color-text)">${esc(uName)} <span style="color:${MUT(42)}">· ${esc(roleLbl)}</span></span>
@@ -985,7 +1106,7 @@ function queueView(){
       <span style="display:flex;align-items:center;gap:9px">
         <span style="font-size:14px;font-weight:${on?'600':'500'};color:${dn?MUT(42):'var(--color-text)'};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0">${esc(l.name)}</span>
         <span style="flex:1"></span>
-        ${dn?ic('ph-check-circle',16,'var(--color-accent)'):''}
+        ${dn?ic('ph-check-circle',16,'var(--color-accent)'):(reworkOf(l.id)?'<span class="ls-badge" style="background:var(--color-accent-200);color:var(--color-accent-800)">redo</span>':'')}
       </span>
       <span style="display:flex;align-items:center;gap:8px;margin-top:6px">
         <span style="font-size:12px;color:${MUT(48)};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0">${esc(l.LRM)}</span>
@@ -1039,6 +1160,12 @@ function auditPanel(){
       <span style="flex:1"></span>
       <span style="font-size:12.5px;color:${MUT(45)};font-variant-numeric:tabular-nums">${rank} of ${dl.length}</span>
     </div>
+    ${(function(){const rw=reworkOf(l.id);if(!rw)return'';
+      return `<div style="border-left:3px solid var(--color-accent);background:var(--color-accent-100);padding:13px 0 13px 16px;margin:4px 0 16px">
+        <div style="font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;font-weight:700;color:var(--color-accent-800)">Sent back for rework</div>
+        ${rw.review_note?`<div style="font-size:14.5px;line-height:1.55;padding-top:7px;max-width:62ch;text-wrap:pretty">${esc(rw.review_note)}</div>`:''}
+        <div style="font-size:12px;color:${MUT(52)};padding-top:7px">${esc(rw.reviewer_name||'Quality audit')}${rw.reassigned_to?' · reassigned to '+esc(rw.reassigned_to):''} — redo the RCA below and submit again.</div>
+      </div>`;})()}
     <div style="display:flex;align-items:baseline;gap:14px;flex-wrap:wrap">
       <h3 style="margin:0;font-family:var(--font-heading);font-size:31px;font-weight:700;letter-spacing:-.015em">${esc(l.name)}</h3>
       <span style="font-size:13px;color:${MUT(48)}">${esc(l.meta)}</span>
@@ -1150,7 +1277,9 @@ function mtdView(){
   const closure=sum.act?Math.round(sum.cl/sum.act*100):null;
   const repAll=board.length?Math.round(board.reduce(function(a,r){return a+r.repeat*r.done;},0)/Math.max(1,sum.done)):0;
   const days=(board[0]&&board[0].days)||0;
-  const isAdmin=S.role==='admin';
+  const qb=mtdBoard('tl');
+  const qsum=qb.reduce(function(a,r){a.rev+=r.reviewed;a.acc+=r.accepted;a.rew+=r.rework;return a;},{rev:0,acc:0,rew:0});
+  const accPct=qsum.rev?Math.round(qsum.acc/qsum.rev*100):null;
 
   const hero=function(v,lbl,sub,tone){return '<div style="min-width:150px">'+
     '<div style="font-family:var(--font-heading);font-size:64px;line-height:.92;font-weight:700;letter-spacing:-.03em;font-variant-numeric:tabular-nums;color:'+(tone||'var(--color-text)')+'">'+v+'</div>'+
@@ -1190,22 +1319,19 @@ function mtdView(){
         '<span style="font-size:11.5px;color:'+MUT(42)+';white-space:nowrap">'+esc(c?c.short:r.cat)+'</span></div></div>';}).join('');
 
   const acts=actionRows(),open=acts.filter(function(a){return a.status==='Open';}).length;
-  const af=S.actFilter||'open';
-  const shown=acts.filter(function(a){return af==='all'||(af==='open'?a.status==='Open':a.status==='Done');}).slice(0,60);
-  const afBtn=function(k,l,n){const on=af===k;
-    return '<button data-act="actFilter" data-v="'+k+'" style="background:none;border:none;padding:0 0 3px;cursor:pointer;font-family:inherit;font-size:13px;color:'+(on?'var(--color-text)':MUT(48))+';font-weight:'+(on?'600':'400')+';border-bottom:1.5px solid '+(on?'var(--color-text)':'transparent')+'">'+l+' <span style="color:'+MUT(38)+'">'+n+'</span></button>';};
-  const actList=shown.map(function(a){
-    const k=a.date+'|'+a.lead,busy=S.actBusy===k,done=a.status==='Done';
-    return '<div style="display:flex;align-items:flex-start;gap:16px;padding:13px 0;border-bottom:1px solid var(--color-divider)">'+
-      '<div style="flex:1;min-width:0">'+
-        '<div style="font-size:14px;line-height:1.4;font-weight:'+(done?'400':'600')+';color:'+(done?MUT(45):'var(--color-text)')+';text-wrap:pretty">'+esc(a.action)+'</div>'+
-        '<div style="font-size:12.5px;color:'+MUT(48)+';padding-top:4px">'+esc(a.owner||'\u2014')+' \u00b7 '+esc(a.lrm||'')+' \u00b7 TL '+esc(a.tl||'')+' \u00b7 '+esc(fmtD(a.date))+'</div>'+
-      '</div>'+
-      (done
-        ? '<span style="display:flex;align-items:center;gap:6px;font-size:12.5px;color:'+MUT(45)+';white-space:nowrap;padding-top:2px">'+ic('ph-check-circle',14,'var(--color-accent)')+'Done</span>'+
-          '<button data-act="actDone" data-v="'+k+'|open" '+(busy?'disabled':'')+' style="background:none;border:none;padding:0;cursor:pointer;font-family:inherit;font-size:12.5px;color:'+MUT(45)+';text-decoration:underline;white-space:nowrap">Reopen</button>'
-        : '<button data-act="actDone" data-v="'+k+'|done" '+(busy?'disabled':'')+' class="ls-btn" style="background:none;border:1px solid '+MUT(22)+';padding:6px 13px;cursor:pointer;font-family:inherit;font-size:12.5px;white-space:nowrap;color:var(--color-text)">'+(busy?'Saving\u2026':'Mark done')+'</button>')+
-    '</div>';}).join('');
+  const qrows=qb.map(function(r){
+    const tone=r.quality==null?MUT(45):r.quality>=80?'var(--color-accent)':r.quality>=60?'var(--color-text)':'var(--color-accent-2)';
+    const unseen=Math.max(0,r.done-r.reviewed);
+    return '<tr>'+
+      '<td style="'+td+'"><span style="font-weight:600">'+esc(r.name)+'</span>'+
+        (r.cluster?'<span style="color:'+MUT(42)+'"> \u00b7 '+esc(r.cluster)+'</span>':'')+'</td>'+
+      '<td style="'+num+'">'+r.done+'</td>'+
+      '<td style="'+num+'">'+r.reviewed+(unseen?'<span style="color:'+MUT(38)+'"> \u00b7 '+unseen+' unreviewed</span>':'')+'</td>'+
+      '<td style="'+num+';color:'+(r.acceptance==null?MUT(35):r.acceptance>=80?'var(--color-text)':'var(--color-accent-2-800)')+'">'+(r.acceptance==null?'\u2014':r.acceptance+'%')+'</td>'+
+      '<td style="'+num+';color:'+(r.rework?'var(--color-accent-2-800)':MUT(32))+'">'+(r.rework||'\u2014')+'</td>'+
+      '<td style="'+num+';color:'+MUT(65)+'">'+r.depth+'%</td>'+
+      '<td style="'+num+';color:'+MUT(65)+'">'+(r.closure==null?'\u2014':r.closure+'%')+'</td>'+
+      '<td style="'+num+';font-weight:700;color:'+tone+'">'+(r.quality==null?'<span style="font-weight:400;font-size:12.5px;color:'+MUT(35)+'">not reviewed yet</span>':r.quality)+'</td></tr>';}).join('');
   const expBtn=function(k,l,s){return '<button data-act="exportCsv" data-v="'+k+'" class="ls-btn" style="display:block;text-align:left;background:none;border:none;border-bottom:1px solid var(--color-divider);width:100%;padding:13px 0;cursor:pointer;font-family:inherit">'+
     '<span style="display:flex;align-items:center;gap:10px"><span style="flex:1;font-size:14px;font-weight:600">'+l+'</span>'+ic('ph-download-simple',16,MUT(45))+'</span>'+
     '<span style="display:block;font-size:12.5px;color:'+MUT(48)+';padding-top:3px">'+s+'</span></button>';};
@@ -1221,6 +1347,7 @@ function mtdView(){
       hero(pct+'%','Audits done till date',sum.done+' of '+sum.exp+' expected',pct>=90?'var(--color-accent)':pct<70?'var(--color-accent-2)':'')+
       hero(closure==null?'\u2014':closure+'%','Actions closed',sum.act?sum.cl+' of '+sum.act+' assigned':'no actions raised yet')+
       hero(repAll+'%','Repeat findings','same LRM, same root cause',repAll>=30?'var(--color-accent-2)':'')+
+      hero(accPct==null?'\u2014':accPct+'%','RCAs accepted on review',qsum.rev?qsum.acc+' of '+qsum.rev+' reviewed \u00b7 '+qsum.rew+' sent back':'nothing reviewed yet',accPct!=null&&accPct<80?'var(--color-accent-2)':'')+
     '</div>'+
     (empty?'<div style="font-size:14.5px;line-height:1.6;color:'+MUT(50)+';max-width:60ch;padding-bottom:40px">No RCAs have been logged this month yet, so there is nothing to score. The board fills in as team leads submit.</div>':'')+
     '<div style="display:flex;align-items:baseline;gap:26px;flex-wrap:wrap;padding-bottom:16px">'+lvlBtn+'</div>'+
@@ -1229,29 +1356,111 @@ function mtdView(){
       '<th style="'+th+'">Audits done till date</th><th style="'+th+'">Done / expected</th>'+
       '<th style="'+th+'">Actions closed</th><th style="'+th+'">Repeat rate</th></tr></thead>'+
       '<tbody>'+(rows||'<tr><td colspan="5" style="'+td+';color:'+MUT(45)+'">No reporting lines in scope.</td></tr>')+'</tbody></table>'+
-    '<div style="display:grid;grid-template-columns:'+(isAdmin?'1.4fr 1fr':'1fr')+';gap:64px;align-items:start;max-width:1100px">'+
+    '<div style="display:grid;grid-template-columns:1.4fr 1fr;gap:64px;align-items:start;max-width:1100px">'+
       '<div>'+kicker('Root causes this month',6)+'<div style="border-top:1px solid var(--color-text)">'+
         (rootList||'<div style="padding:12px 0;font-size:13.5px;color:'+MUT(45)+'">Nothing logged yet.</div>')+'</div></div>'+
-      (isAdmin?'<div>'+kicker('Export',6)+
-        '<div style="font-size:13px;line-height:1.55;color:'+MUT(52)+';padding:0 0 10px;text-wrap:pretty">CSV, this month, scoped to everything you can see.</div>'+
+      '<div>'+kicker('Export',6)+
+        '<div style="font-size:13px;line-height:1.55;color:'+MUT(52)+';padding:0 0 10px;text-wrap:pretty">One file per question, this month, scoped to what you can see.</div>'+
         '<div style="border-top:1px solid var(--color-text)">'+
-        expBtn('mtd','MTD summary','All three levels \u2014 TL, ADOS and ZSM \u2014 in one file.')+
-        expBtn('actions','Action tracker',acts.length+' action'+(acts.length===1?'':'s')+', '+open+' still open.')+
-        expBtn('roots','Root-cause frequency',rootFreq().length+' distinct root cause'+(rootFreq().length===1?'':'s')+'.')+
-        '</div></div>':'')+
+        expBtn('quality','RCA quality scorecard','Is the RCA work any good \u2014 one row per TL: reviewed, accepted, sent back, depth, closure, score.')+
+        expBtn('mtd','Completion','Did they do the volume \u2014 '+(lvl==='tl'?'per team lead':lvl==='ados'?'per ADOS':'per ZSM')+', expected vs done.')+
+        expBtn('actions','Actions','Did the fix happen \u2014 '+acts.length+' action'+(acts.length===1?'':'s')+', '+open+' still open.')+
+        expBtn('roots','Root causes','What keeps breaking \u2014 '+rootFreq().length+' distinct root cause'+(rootFreq().length===1?'':'s')+'.')+
+        '</div></div>'+
     '</div>'+
-    '<div style="padding:56px 0 0;max-width:820px">'+
-      '<div style="display:flex;align-items:baseline;gap:22px;flex-wrap:wrap;padding-bottom:12px">'+
-        kicker('Action tracker',0)+
-        '<span style="flex:1"></span>'+
-        afBtn('open','Open',open)+afBtn('done','Done',acts.length-open)+afBtn('all','All',acts.length)+
-      '</div>'+
-      '<div style="border-top:1px solid var(--color-text)">'+
-        (actList||'<div style="padding:13px 0;font-size:13.5px;color:'+MUT(45)+'">No actions in this view.</div>')+
-      '</div>'+
-      (shown.length<acts.length&&af==='all'?'<div style="font-size:12.5px;color:'+MUT(42)+';padding-top:12px">Showing the first 60. Export for the full list.</div>':'')+
+    '<div style="padding:56px 0 0">'+
+      kicker('Was the RCA any good?',6)+
+      '<div style="font-size:13.5px;line-height:1.6;color:'+MUT(52)+';max-width:74ch;padding-bottom:14px;text-wrap:pretty">Quality is the auditor\u2019s verdict, not an opinion of ours: the score weights acceptance on review (45%), whether the action raised was actually closed (25%), how often the analysis was walked all the way to a root cause (15%) and how rarely the same LRM fails the same way again (15%). A team lead whose RCAs nobody has reviewed yet scores nothing \u2014 that is a gap in the audit, not in their work.</div>'+
+      '<table style="width:100%;border-collapse:collapse">'+
+        '<thead><tr><th style="'+th+'">Team lead</th><th style="'+th+'">RCAs logged</th>'+
+        '<th style="'+th+'">Reviewed</th><th style="'+th+'">Accepted</th><th style="'+th+'">Sent back</th>'+
+        '<th style="'+th+'">Reached root cause</th><th style="'+th+'">Actions closed</th>'+
+        '<th style="'+th+'">Quality score</th></tr></thead>'+
+        '<tbody>'+(qrows||'<tr><td colspan="8" style="'+td+';color:'+MUT(45)+'">Nothing logged this month.</td></tr>')+'</tbody></table>'+
     '</div>'+
     '</div>';
+}
+// ---- Actions taken ------------------------------------------------------------------
+// An RCA that raises an action and never closes it is paperwork. This is the screen where
+// that gets checked \u2014 and it is a TL screen first: the actions on it are the ones their
+// own team owes. Managers see their line, admin sees everything.
+function actItem(a){
+  const k=a.date+'|'+a.lead,busy=S.actBusy===k,done=a.status==='Done';
+  const late=!done&&a.age>7;
+  return '<div style="display:flex;align-items:flex-start;gap:18px;padding:14px 0;border-bottom:1px solid var(--color-divider)">'+
+    '<div style="flex:1;min-width:0">'+
+      '<div style="font-size:14.5px;line-height:1.45;font-weight:'+(done?'400':'600')+';color:'+(done?MUT(45):'var(--color-text)')+';text-wrap:pretty">'+esc(a.action)+'</div>'+
+      '<div style="font-size:12.5px;color:'+MUT(48)+';padding-top:5px">'+esc(a.owner||'\u2014')+' \u00b7 '+esc(a.lrm||'')+
+        (isTL()?'':' \u00b7 TL '+esc(a.tl||''))+' \u00b7 '+esc(a.name||a.lead)+' \u00b7 '+esc(fmtD(a.date))+
+        (late?'<span style="color:var(--color-accent-2-800);font-weight:600"> \u00b7 open '+a.age+' days</span>':'')+
+        (a.verdict==='rework'?'<span style="color:var(--color-accent-800);font-weight:600"> \u00b7 RCA sent back</span>':'')+'</div>'+
+    '</div>'+
+    (done
+      ? '<span style="display:flex;align-items:center;gap:6px;font-size:12.5px;color:'+MUT(45)+';white-space:nowrap;padding-top:3px">'+ic('ph-check-circle',15,'var(--color-accent)')+'Done</span>'+
+        '<button data-act="actDone" data-v="'+k+'|open" '+(busy?'disabled':'')+' style="background:none;border:none;padding:0;cursor:pointer;font-family:inherit;font-size:12.5px;color:'+MUT(45)+';text-decoration:underline;white-space:nowrap">Reopen</button>'
+      : '<button data-act="actDone" data-v="'+k+'|done" '+(busy?'disabled':'')+' class="ls-btn" style="background:none;border:1px solid '+MUT(22)+';padding:7px 14px;cursor:pointer;font-family:inherit;font-size:12.5px;white-space:nowrap;color:var(--color-text)">'+(busy?'Saving\u2026':'Mark done')+'</button>')+
+  '</div>';
+}
+function actionsView(){
+  const acts=actionRows(),rew=reworkList();
+  const mon=mtdMonth(),d=new Date(mon+'-01T00:00:00');
+  const monLbl=isNaN(d)?mon:MON[d.getMonth()]+' '+d.getFullYear();
+  const open=acts.filter(function(a){return a.status==='Open';}).length;
+  const done=acts.length-open;
+  const late=acts.filter(function(a){return a.status==='Open'&&a.age>7;}).length;
+  const closure=acts.length?Math.round(done/acts.length*100):null;
+  const af=S.actFilter||'open';
+  const shown=acts.filter(function(a){return af==='all'||(af==='open'?a.status==='Open':a.status==='Done');});
+  const list=shown.slice(0,120).map(actItem).join('');
+  const afBtn=function(k,l,n){const on=af===k;
+    return '<button data-act="actFilter" data-v="'+k+'" style="background:none;border:none;padding:0 0 3px;cursor:pointer;font-family:inherit;font-size:13.5px;color:'+(on?'var(--color-text)':MUT(48))+';font-weight:'+(on?'600':'400')+';border-bottom:1.5px solid '+(on?'var(--color-text)':'transparent')+'">'+l+' <span style="color:'+MUT(38)+'">'+n+'</span></button>';};
+  const hero=function(v,lbl,sub,tone){return '<div style="min-width:140px">'+
+    '<div style="font-family:var(--font-heading);font-size:56px;line-height:.92;font-weight:700;letter-spacing:-.03em;font-variant-numeric:tabular-nums;color:'+(tone||'var(--color-text)')+'">'+v+'</div>'+
+    '<div style="font-size:13.5px;color:'+MUT(58)+';padding-top:10px">'+lbl+'</div>'+
+    (sub?'<div style="font-size:12.5px;color:'+MUT(40)+';padding-top:3px">'+sub+'</div>':'')+'</div>';};
+  const rewList=rew.slice(0,20).map(function(r){
+    return '<div style="padding:14px 0;border-bottom:1px solid var(--color-divider)">'+
+      '<div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap">'+
+        '<span style="font-size:14.5px;font-weight:600">'+esc(r.name)+'</span>'+
+        '<span style="font-size:12.5px;color:'+MUT(48)+'">'+esc(r.lrm)+(isTL()?'':' \u00b7 TL '+esc(r.tl))+' \u00b7 '+esc(fmtD(r.date))+'</span>'+
+        '<span style="flex:1"></span>'+
+        (r.live?'<span class="tag tag-accent">Redo in today\u2019s queue</span>':'<span class="tag tag-outline">'+esc(fmtD(r.date))+'</span>')+'</div>'+
+      (r.note?'<div style="font-size:13.5px;line-height:1.55;padding-top:6px;max-width:74ch;text-wrap:pretty">\u201c'+esc(r.note)+'\u201d</div>':'')+
+      '<div style="font-size:12px;color:'+MUT(45)+';padding-top:5px">Sent back by '+esc(r.by||'the Quality auditor')+
+        (r.assignee?' \u00b7 reassigned to '+esc(r.assignee):'')+'</div>'+
+    '</div>';}).join('');
+  return '<div class="wrap" style="padding-bottom:80px;animation:lsfade .25s ease">'+
+    '<div style="padding:38px 0 30px">'+
+      kicker(esc(monLbl)+' &middot; month to date',10)+
+      '<h2 style="margin:0;font-family:var(--font-heading);font-size:44px;line-height:1;font-weight:700;letter-spacing:-.02em">Actions taken</h2>'+
+      '<div style="font-size:14.5px;line-height:1.6;color:'+MUT(55)+';padding-top:14px;max-width:70ch;text-wrap:pretty">'+
+        (isTL()?'Every corrective action your RCAs raised this month. Close one when the LRM has actually done it \u2014 an action left open is what a manager sees against your team.'
+              :'Every corrective action raised this month by the teams you cover, and whether it was closed.')+'</div>'+
+    '</div>'+
+    '<div style="display:flex;gap:70px;flex-wrap:wrap;padding-bottom:44px">'+
+      hero(open,'Still open',late?late+' open more than a week':'nothing overdue',open?'var(--color-accent-2)':MUT(32))+
+      hero(done,'Closed',acts.length+' raised in all')+
+      hero(closure==null?'\u2014':closure+'%','Closure rate','of what this month raised',closure!=null&&closure<60?'var(--color-accent-2)':'')+
+    '</div>'+
+    (rew.length?'<div style="padding:0 0 48px">'+
+      kicker('Sent back for rework \u00b7 '+rew.length,6)+
+      '<div style="font-size:13.5px;line-height:1.6;color:'+MUT(52)+';max-width:70ch;padding-bottom:8px;text-wrap:pretty">'+
+        (isTL()?'The Quality auditor did not accept these. Reopen the lead in your queue and redo the RCA \u2014 they do not count as cleared until you do.'
+              :'RCAs the Quality auditor sent back this month.')+'</div>'+
+      '<div style="border-top:1px solid var(--color-text)">'+rewList+'</div>'+
+      (rew.length>20?'<div style="font-size:12.5px;color:'+MUT(42)+';padding-top:12px">Showing the 20 most recent.</div>':'')+
+    '</div>':'')+
+    '<div style="max-width:900px">'+
+      '<div style="display:flex;align-items:baseline;gap:22px;flex-wrap:wrap;padding-bottom:12px">'+
+        kicker('The actions',0)+'<span style="flex:1"></span>'+
+        afBtn('open','Open',open)+afBtn('done','Done',done)+afBtn('all','All',acts.length)+
+      '</div>'+
+      '<div style="border-top:1px solid var(--color-text)">'+
+        (list||'<div style="padding:14px 0;font-size:13.5px;color:'+MUT(45)+'">'+(acts.length?'Nothing in this view.':'No actions raised yet this month. An RCA only raises one when the TL picks something other than \u201cNo action needed\u201d.')+'</div>')+
+      '</div>'+
+      (shown.length>120?'<div style="font-size:12.5px;color:'+MUT(42)+';padding-top:12px">Showing the 120 most recent of '+shown.length+'.</div>':'')+
+    '</div>'+
+  '</div>';
 }
 function assigneesFor(origTl){const names=[origTl];TLS().forEach(t=>{if(t.name&&names.indexOf(t.name)<0)names.push(t.name);});return names.filter(Boolean);}
 // Every RCA an auditor is entitled to see comes from the SHARED log, not from this
@@ -1357,6 +1566,8 @@ function rcaView(){
     const accStyle='padding:8px 14px;font-size:13px;border:1.5px solid '+(v==='accept'?'var(--color-accent-2);background:var(--color-accent-2-100);color:var(--color-accent-2-800)':MUT(16)+';color:'+MUT(78));
     const rewStyle='padding:8px 14px;font-size:13px;border:1.5px solid '+(v==='rework'?'var(--color-accent);background:var(--color-accent-200);color:var(--color-accent-800)':MUT(16)+';color:'+MUT(78));
     const statl=v==='accept'?['Accepted','tag tag-accent-2']:v==='rework'?['Sent for rework','tag tag-outline']:['Awaiting review','tag tag-neutral'];
+    const busy=S.revBusy===s.id;
+    const savedLbl=busy?'Saving…':(v?((r.saved?'Saved to the log':'Not saved yet')+(r.by?' · '+r.by:'')):'');
     const wrap=v==='rework'?'border-left:3px solid var(--color-accent)':v==='accept'?'border-left:3px solid var(--color-accent-2)':'';
     const assignee=r.assignee||s.tl;
     const reassigned=v==='rework'&&r.assignee&&r.assignee!==s.tl;
@@ -1365,7 +1576,7 @@ function rcaView(){
       const noteLbl=v==='rework'?('What '+esc(first1(s.LRM))+'\u2019s TL must correct'):('Note on '+esc(first1(s.LRM))+'\u2019s RCA (optional)');
       const reassign=v==='rework'?`<div class="field" style="min-width:210px"><label>Reassign RCA to</label><select class="input" data-act="rcaAssignee" data-v="${s.id}">${assigneesFor(s.tl).map(n=>`<option value="${esc(n)}" ${assignee===n?'selected':''}>${esc(n===s.tl?n+' (redo)':n)}</option>`).join('')}</select></div>`:'';
       const notif=reassigned?`<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:12px"><span style="font-size:11.5px;color:${MUT(60)};display:flex;align-items:center;gap:7px"><span style="width:6px;height:6px;border-radius:999px;background:var(--color-accent)"></span>Rework routed to ${esc(assignee)}.</span><span style="flex:1"></span>${r.notified?`<span class="tag tag-accent-2">✓ Notified — sent to inbox &amp; Slack</span>`:`<button class="btn btn-primary" data-act="rcaNotify" data-v="${s.id}" style="font-size:12.5px;padding:7px 14px">Notify ${esc(s.tl)} &amp; ${esc(assignee)}</button>`}</div>`:'';
-      noteBlock=`<div style="display:grid;grid-template-columns:1fr auto;gap:16px;align-items:end;animation:lsfade .2s ease"><div class="field"><label>${noteLbl}</label><textarea class="input" data-act="rcaNote" data-v="${s.id}" rows="2" placeholder="What the TL should correct or confirm…" style="min-height:auto;resize:none">${esc(r.note||'')}</textarea></div>${reassign}</div>${notif}`;
+      noteBlock=`<div style="display:grid;grid-template-columns:1fr auto;gap:16px;align-items:end;animation:lsfade .2s ease"><div class="field"><label>${noteLbl}</label><textarea class="input" data-act="rcaNote" data-v="${s.id}" rows="2" placeholder="What the TL should correct or confirm…" style="min-height:auto;resize:none">${esc(r.note||'')}</textarea></div>${reassign}</div>${v==='rework'?`<div style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--color-accent-800);padding-top:10px">${ic('ph-arrow-counter-clockwise',13,'var(--color-accent)')}Reopened in ${esc(s.tl)}’s queue — this lead stops counting as cleared until the RCA is redone.</div>`:''}${notif}`;
     }
     return `<div class="card elev-sm" style="padding:20px 22px;gap:14px;${wrap}">
       <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px">
@@ -1373,7 +1584,7 @@ function rcaView(){
         <div style="display:flex;gap:8px;align-items:center;flex:none"><span class="${catcls}">${esc(c?c.name:s.cat)}</span><span style="font-size:10px;font-weight:700;padding:2px 9px;border-radius:999px;white-space:nowrap;${sm[1]}">${sm[0]}</span></div></div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;background:var(--color-bg);border:1px solid var(--color-divider);border-radius:14px;padding:14px 16px"><div><div style="font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:${MUT(50)};margin-bottom:4px">Root cause logged</div><div style="font-size:13.5px">${esc(s.rca)}</div></div><div><div style="font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:${MUT(50)};margin-bottom:4px">Action · owner</div><div style="font-size:13.5px">${esc(s.action)}</div><div style="font-size:12px;color:${MUT(50)};margin-top:3px">${esc(s.owner||'—')}</div></div></div>
       ${recRow(s)}
-      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;border-top:1px solid var(--color-divider);padding-top:14px"><span style="font-size:13px;font-weight:600">Is this RCA done correctly?</span><button class="btn" data-act="rcaAccept" data-v="${s.id}" style="${accStyle}"><span style="margin-right:6px">✓</span>Accept RCA</button><button class="btn" data-act="rcaRework" data-v="${s.id}" style="${rewStyle}"><span style="margin-right:6px">↺</span>Needs rework</button><span style="flex:1"></span><span class="${statl[1]}">${statl[0]}</span></div>
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;border-top:1px solid var(--color-divider);padding-top:14px"><span style="font-size:13px;font-weight:600">Is this RCA done correctly?</span><button class="btn" data-act="rcaAccept" data-v="${s.id}" style="${accStyle}"><span style="margin-right:6px">✓</span>Accept RCA</button><button class="btn" data-act="rcaRework" data-v="${s.id}" style="${rewStyle}"><span style="margin-right:6px">↺</span>Needs rework</button><span style="flex:1"></span>${savedLbl?`<span style="font-size:11.5px;color:${MUT(45)};white-space:nowrap">${esc(savedLbl)}</span>`:''}<span class="${statl[1]}">${statl[0]}</span></div>
       ${noteBlock}</div>`;}).join('');
   return `<div class="wrap" style="max-width:1100px;padding-bottom:44px;animation:lsfade .25s ease">
     <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:20px;flex-wrap:wrap;padding:14px 0 20px">
@@ -1684,10 +1895,15 @@ function mgrView(){
   const tls=TLS();
   const myTl=S.meEmail||null;
   const catCount=(tl,k)=>((S.model&&S.model.leadsByTl[tl])||[]).filter(l=>l.cat===k).length;
-  const doneFor=tl=>doneByTl(tl);
+  // Count against TODAY'S PICK, not the whole log: a TL is asked for 15 leads, so "done",
+  // "open" and "sent back" have to be three slices of those same 15 or the row does not add
+  // up (sent back read higher than open, because the log carries leads outside the pick).
+  const leadsOf=tl=>(S.model&&S.model.leadsByTl[tl])||[];
+  const doneFor=tl=>leadsOf(tl).filter(l=>rcaDone(l.id)).length;
+  const backFor=tl=>leadsOf(tl).filter(l=>reworkOf(l.id)).length;
   const totAll=tls.reduce((s,t)=>s+t.total,0);
   const rows=tls.map(t=>{
-    const tot=t.total,dn=Math.min(tot,doneFor(t.email)),open=tot-dn,mine=t.email===myTl,pc=tot?dn/tot*100:0;
+    const tot=t.total,dn=Math.min(tot,doneFor(t.email)),back=backFor(t.email),open=tot-dn,mine=t.email===myTl,pc=tot?dn/tot*100:0;
     const td=`padding:12px 10px;border-bottom:1px solid var(--color-divider);font-variant-numeric:tabular-nums;text-align:right`;
     const tone=pc>=100?'var(--color-accent)':pc>=50?'var(--color-text)':'var(--color-accent-2)';
     return `<tr class="ls-row">
@@ -1697,14 +1913,14 @@ function mgrView(){
       <td style="${td}">${tot}</td>
       <td style="${td}">${dn}</td>
       <td style="${td};${open?'':'color:'+MUT(32)}">${open||'—'}</td>
-      ${CATS.map(c=>`<td style="${td};color:${MUT(62)}">${catCount(t.email,c.key)||''}</td>`).join('')}
+      <td style="${td};${back?'color:var(--color-accent-800)':'color:'+MUT(32)}">${back||'—'}</td>      ${CATS.map(c=>`<td style="${td};color:${MUT(62)}">${catCount(t.email,c.key)||''}</td>`).join('')}
     </tr>`;}).join('');
   const catTot=CATS.map(c=>tls.reduce((s,t)=>s+catCount(t.email,c.key),0));
   const doneAll=tls.reduce((s,t)=>s+doneFor(t.email),0);
   const th=`padding:0 10px 9px;font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;font-weight:400;color:${MUT(45)};border-bottom:2px solid var(--color-text)`;
-  const head=`<tr><th style="${th};text-align:left;padding-left:0">Team lead</th><th style="${th};text-align:left">Cluster</th><th style="${th};text-align:right">Progress</th><th style="${th};text-align:right">To audit</th><th style="${th};text-align:right">Done</th><th style="${th};text-align:right">Open</th>${CATS.map(c=>`<th style="${th};text-align:right"><span style="display:inline-flex;align-items:center;gap:5px;justify-content:flex-end">${ic(cstyle(c.key).icon,13,cstyle(c.key).tone)}${esc(c.short||c.name)}</span></th>`).join('')}</tr>`;
+  const head=`<tr><th style="${th};text-align:left;padding-left:0">Team lead</th><th style="${th};text-align:left">Cluster</th><th style="${th};text-align:right">Progress</th><th style="${th};text-align:right">To audit</th><th style="${th};text-align:right">Done</th><th style="${th};text-align:right">Open</th><th style="${th};text-align:right">Sent back</th>${CATS.map(c=>`<th style="${th};text-align:right"><span style="display:inline-flex;align-items:center;gap:5px;justify-content:flex-end">${ic(cstyle(c.key).icon,13,cstyle(c.key).tone)}${esc(c.short||c.name)}</span></th>`).join('')}</tr>`;
   const tdf=`padding:11px 10px;border-bottom:1px solid var(--color-divider);font-variant-numeric:tabular-nums;text-align:right`;
-  const foot=`<tr><td style="${tdf};text-align:left;padding-left:0;font-weight:700;border-bottom:none;border-top:1px solid var(--color-text)">All teams</td><td style="${tdf};border-bottom:none;border-top:1px solid var(--color-text)"></td><td style="${tdf};border-bottom:none;border-top:1px solid var(--color-text)"></td><td style="${tdf};font-weight:700;border-bottom:none;border-top:1px solid var(--color-text)">${totAll}</td><td style="${tdf};font-weight:700;border-bottom:none;border-top:1px solid var(--color-text)">${doneAll}</td><td style="${tdf};font-weight:700;border-bottom:none;border-top:1px solid var(--color-text)">${totAll-doneAll}</td>${catTot.map(n=>`<td style="${tdf};font-weight:700;border-bottom:none;border-top:1px solid var(--color-text)">${n||''}</td>`).join('')}</tr>`;
+  const foot=`<tr><td style="${tdf};text-align:left;padding-left:0;font-weight:700;border-bottom:none;border-top:1px solid var(--color-text)">All teams</td><td style="${tdf};border-bottom:none;border-top:1px solid var(--color-text)"></td><td style="${tdf};border-bottom:none;border-top:1px solid var(--color-text)"></td><td style="${tdf};font-weight:700;border-bottom:none;border-top:1px solid var(--color-text)">${totAll}</td><td style="${tdf};font-weight:700;border-bottom:none;border-top:1px solid var(--color-text)">${doneAll}</td><td style="${tdf};font-weight:700;border-bottom:none;border-top:1px solid var(--color-text)">${totAll-doneAll}</td><td style="${tdf};font-weight:700;border-bottom:none;border-top:1px solid var(--color-text)">${tls.reduce((s,t)=>s+backFor(t.email),0)||''}</td>${catTot.map(n=>`<td style="${tdf};font-weight:700;border-bottom:none;border-top:1px solid var(--color-text)">${n||''}</td>`).join('')}</tr>`;
   if(!tls.length)return `<div class="wrap" style="padding-top:96px"><h2 style="margin:0 0 12px;font-size:34px;font-weight:700">No teams in today’s queue</h2><div style="font-size:15.5px;line-height:1.6;color:${MUT(60)};max-width:56ch;text-wrap:pretty">Nothing has been distributed across teams yet — either today’s export is empty, or its leads aren’t matching the mapping sheet.</div>${diagBlock()}</div>`;
   return `<div class="wrap" style="padding-bottom:80px;animation:lsfade .25s ease">
     <div style="padding:38px 0 28px">
@@ -1727,7 +1943,7 @@ function mgrView(){
       </div>
     </div>
     <table style="width:100%;border-collapse:collapse;font-size:14px"><thead>${head}</thead><tbody>${rows}${foot}</tbody></table>
-    <div style="font-size:12.5px;line-height:1.6;color:${MUT(48)};max-width:76ch;padding-top:20px">Live from today’s queue and the shared RCA log. “Done” counts the latest logged RCA per lead${S.rcaPending?` · <b>${S.rcaPending} of yours still syncing</b>`:''}${S.rcaErr?` · <span style="color:var(--color-accent-2-700)">log write failing: ${esc(S.rcaErr)}</span>`:''}</div>
+    <div style="font-size:12.5px;line-height:1.6;color:${MUT(48)};max-width:76ch;padding-top:20px">Live from today’s queue and the shared RCA log. “Done” counts the latest logged RCA per lead, less anything the Quality auditor sent back${S.rcaPending?` · <b>${S.rcaPending} of yours still syncing</b>`:''}${S.rcaErr?` · <span style="color:var(--color-accent-2-700)">log write failing: ${esc(S.rcaErr)}</span>`:''}</div>
   </div>`;
 }
 
@@ -1770,9 +1986,9 @@ document.addEventListener('click',e=>{
   else if(act==='next'){const dl=catLeads(S.catKey),i=dl.findIndex(x=>x.id===S.selId);for(let k=1;k<=dl.length;k++){const j=(i+k)%dl.length;if(!rcaDone(dl[j].id)){S.selId=dl[j].id;render();return;}}S.selId=dl[(i+1)%dl.length].id;render();}
   else if(act==='rcaRange'){S.rcaRange=v;S.rcaTouched={};render();}
   else if(act==='rcaFilter'){S.rcaFilter=v;S.rcaTouched={};render();}
-  else if(act==='rcaAccept'){const cur=S.rcaReview[v]||{};S.rcaTouched=Object.assign({},S.rcaTouched,{[v]:true});patchRv(v,{verdict:cur.verdict==='accept'?null:'accept'});render();}
-  else if(act==='rcaRework'){const cur=S.rcaReview[v]||{};S.rcaTouched=Object.assign({},S.rcaTouched,{[v]:true});patchRv(v,{verdict:cur.verdict==='rework'?null:'rework'});render();}
-  else if(act==='rcaNotify'){patchRv(v,{notified:true});render();}
+  else if(act==='rcaAccept'){const cur=S.rcaReview[v]||{};S.rcaTouched=Object.assign({},S.rcaTouched,{[v]:true});patchRv(v,{verdict:cur.verdict==='accept'?null:'accept',saved:false});saveReview(v);}
+  else if(act==='rcaRework'){const cur=S.rcaReview[v]||{};S.rcaTouched=Object.assign({},S.rcaTouched,{[v]:true});patchRv(v,{verdict:cur.verdict==='rework'?null:'rework',saved:false});saveReview(v);}
+  else if(act==='rcaNotify'){patchRv(v,{notified:true});saveReview(v);}
   else if(act==='accessFilter'){S.accessFilter=v;render();}
   else if(act==='setTab'){S.setTab=v;S.mapErr='';S.mapMsg='';render();}
   else if(act==='mapFilter'){S.mapFilter=v;render();}
@@ -1792,7 +2008,9 @@ document.addEventListener('click',e=>{
 document.addEventListener('change',e=>{const t=e.target.closest('[data-act]');if(!t)return;
   if(t.dataset.act==='reason'){patch(S.selId,{reason:t.value});if(t.value&&!(S.audits[S.selId]&&S.audits[S.selId].sev))patch(S.selId,{sev:'med'});render();}
   else if(t.dataset.act==='action'){patch(S.selId,{action:t.value});render();}
-  else if(t.dataset.act==='rcaAssignee'){patchRv(t.dataset.v,{assignee:t.value,notified:false});render();}
+  else if(t.dataset.act==='rcaAssignee'){patchRv(t.dataset.v,{assignee:t.value,notified:false,saved:false});saveReview(t.dataset.v);}
+  // The auditor's note is shared state too — commit it on blur, not on every keystroke.
+  else if(t.dataset.act==='rcaNote'){saveReview(t.dataset.v);}
   else if(t.dataset.act==='mapTl'){
     const e=t.dataset.v;
     if(e.indexOf('@')<0){S.mapErr='That lead record carries no LRM email, so it cannot be mapped. Fix the email in the CRM first.';render();return;}
@@ -1804,7 +2022,7 @@ document.addEventListener('change',e=>{const t=e.target.closest('[data-act]');if
 });
 document.addEventListener('input',e=>{const t=e.target.closest('[data-act]');if(!t)return;
   if(t.dataset.act==='note'){S.audits[S.selId]=Object.assign({},S.audits[S.selId],{note:t.value});}
-  else if(t.dataset.act==='rcaNote'){S.rcaReview[t.dataset.v]=Object.assign({verdict:null,assignee:'',notified:false},S.rcaReview[t.dataset.v],{note:t.value});}
+  else if(t.dataset.act==='rcaNote'){S.rcaReview[t.dataset.v]=Object.assign({verdict:null,assignee:'',notified:false},S.rcaReview[t.dataset.v],{note:t.value,saved:false});}
   else if(t.dataset.act==='auditorInput'){S.newAuditor=t.value;}
   else if(t.dataset.act==='dirSearch'){S.dirQ=t.value;renderKeepFocus('[data-act="dirSearch"]');}
   else if(t.dataset.act==='mapSearch'){S.mapQ=t.value;renderKeepFocus('[data-act="mapSearch"]');}
