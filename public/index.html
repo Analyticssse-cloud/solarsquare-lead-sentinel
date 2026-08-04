@@ -164,7 +164,9 @@ const catObj=k=>CATS.find(c=>c.key===k);
 const S={screen:'queue',mtdLvl:'tl',rcaRange:'today',rcaFilter:'pending',rcaTouched:{},actFilter:'open',actBusy:'',recs:{},recBusy:null,rcaLog:[],rcaPending:0,rcaErr:'',diag:null,diagState:'',access:null,accessBusy:'',accessErr:'',accessFilter:'all',newAccessEmail:'',newAccessRole:'auditor',
   setTab:'access',mapping:null,unmapped:[],mapBusy:'',mapErr:'',mapMsg:'',mapQ:'',mapFilter:'overridden',mapSel:{},mapBulkTl:'',auditRaw:'',auditDate:'',tlEmail:null,catKey:'mcch_past',selId:null,audits:{},rcaReview:{},showRules:false,model:null,src:'live',role:'tl',user:null,meEmail:null,hier:[],rcaAuditors:null,newAuditor:'',dirQ:''};
 
-const AUTH={enabled:true,ready:false,clientId:'',domain:'solarsquare.in',admins:[]};
+const AUTH={enabled:true,ready:false,clientId:'',domain:'solarsquare.in',domains:['solarsquare.in','homes.solarsquare.in'],admins:[]};
+const onAuthDomain=em=>{const e=String(em||'').toLowerCase();return !AUTH.domains.length||AUTH.domains.some(d=>e.endsWith('@'+d));};
+const authDomainList=()=>AUTH.domains.map(d=>'@'+d).join(' or ');
 const LOGO_SRC='./solarsquare-logo.png';   // 1259×828, transparent — sharp up to ~900px wide
 function logoImg(h){return '<img src="'+LOGO_SRC+'" alt="SolarSquare" style="height:'+h+'px;width:auto;display:block" onerror="logoFallback(this,'+h+')">';}
 function logoFallback(el,h){const fs=Math.round(h*0.66);el.outerHTML='<span style="font-family:var(--font-heading);font-size:'+fs+'px;font-weight:600;letter-spacing:-.01em;color:var(--color-text)">Solar<span style="color:var(--color-accent)">Square</span></span>';}
@@ -191,14 +193,14 @@ function authHeaders(){const a=readSession();return a&&a.token?{Authorization:'B
 let gisReady=null;
 function loadGis(){if(gisReady)return gisReady;gisReady=new Promise(res=>{if(window.google&&google.accounts)return res(true);const s=document.createElement('script');s.src='https://accounts.google.com/gsi/client';s.async=1;s.defer=1;s.onload=()=>res(true);s.onerror=()=>res(false);document.head.appendChild(s);});return gisReady;}
 function authMsg(html){const el=document.getElementById('autherr');if(el)el.innerHTML=html||'';}
-function handleCredential(resp){const c=decodeJwt(resp.credential);const em=(c.email||'').toLowerCase();if(AUTH.domain&&c.hd!==AUTH.domain&&!em.endsWith('@'+AUTH.domain)){authMsg('Signed in as <b>'+esc(em||'?')+'</b> — that isn\u2019t an @'+esc(AUTH.domain)+' account. Sign in with your SolarSquare login.');return;}saveSession({name:c.name||'',email:c.email||'',picture:c.picture||'',token:resp.credential});location.reload();}
+function handleCredential(resp){const c=decodeJwt(resp.credential);const em=(c.email||'').toLowerCase();const hd=String(c.hd||'').toLowerCase();if(!(onAuthDomain(em)||AUTH.domains.indexOf(hd)>=0)){authMsg('Signed in as <b>'+esc(em||'?')+'</b> — that isn\u2019t a '+esc(authDomainList())+' account. Sign in with your SolarSquare login.');return;}saveSession({name:c.name||'',email:c.email||'',picture:c.picture||'',token:resp.credential});location.reload();}
 async function renderGoogleBtn(el){
   const ok=await loadGis();
   if(!ok){authMsg('Could not reach Google Sign-In (network/adblock). Check your connection and reload.');return;}
   if(!el||!window.google)return;
   if(!AUTH.clientId){authMsg('Sign-in isn\u2019t configured yet — <code>GOOGLE_CLIENT_ID</code> is not set on the server.');return;}
   try{
-    google.accounts.id.initialize({client_id:AUTH.clientId,callback:handleCredential,hd:AUTH.domain,
+    google.accounts.id.initialize({client_id:AUTH.clientId,callback:handleCredential,...(AUTH.domains.length===1?{hd:AUTH.domains[0]}:{}),
       error_callback:e=>{authMsg('Google rejected sign-in: <b>'+esc((e&&(e.type||e.message))||'unknown')+'</b>. If this says <i>origin</i>, this site\u2019s URL must be added to the OAuth client\u2019s <b>Authorized JavaScript origins</b> in Google Cloud Console.');}});
     el.innerHTML='';
     google.accounts.id.renderButton(el,{theme:'outline',size:'large',shape:'rectangular',text:'signin_with',logo_alignment:'center',width:360});
@@ -206,13 +208,13 @@ async function renderGoogleBtn(el){
   }catch(err){authMsg('Sign-in init failed: <b>'+esc(String(err&&err.message||err))+'</b>');}
 }
 async function initAuth(){
-  try{const r=await fetch('/api/config',{cache:'no-store'});if(r.ok){const c=await r.json();AUTH.enabled=!!c.enabled;AUTH.clientId=c.clientId||'';AUTH.domain=(c.allowedDomain||AUTH.domain||'').toLowerCase();AUTH.admins=c.admins||[];}else{AUTH.enabled=false;}}
+  try{const r=await fetch('/api/config',{cache:'no-store'});if(r.ok){const c=await r.json();AUTH.enabled=!!c.enabled;AUTH.clientId=c.clientId||'';AUTH.domains=(c.allowedDomains&&c.allowedDomains.length?c.allowedDomains:(c.allowedDomain?[c.allowedDomain]:AUTH.domains)).map(d=>String(d).toLowerCase().replace(/^@/,''));AUTH.domain=AUTH.domains[0]||'';AUTH.admins=c.admins||[];}else{AUTH.enabled=false;}}
   catch(e){AUTH.enabled=false;}
   AUTH.ready=true;
 }
 function loginView(denied,reason){
   const em=denied&&readSession()?esc(readSession().email):'';
-  const rmap={'not-signed-in':'Your session expired. Sign in again.','invalid-token':'Your sign-in expired (tokens last ~1 hour). Sign in again.','wrong-audience':'Server GOOGLE_CLIENT_ID doesn\u2019t match the one issuing your login — the two client IDs must be identical.','wrong-domain':'That account isn\u2019t on the allowed Workspace domain.','not-authorized':'Your email isn\u2019t on the ALLOWED_EMAILS allowlist. Ask an admin to add you.','email-unverified':'Your Google email isn\u2019t verified.'};
+  const rmap={'not-signed-in':'Your session expired. Sign in again.','invalid-token':'Your sign-in expired (tokens last ~1 hour). Sign in again.','wrong-audience':'Server GOOGLE_CLIENT_ID doesn\u2019t match the one issuing your login — the two client IDs must be identical.','wrong-domain':'That account isn\u2019t on an allowed Workspace domain (\u0040solarsquare.in or \u0040homes.solarsquare.in).','not-authorized':'Your email isn\u2019t on the ALLOWED_EMAILS allowlist. Ask an admin to add you.','email-unverified':'Your Google email isn\u2019t verified.'};
   const rmsg=reason?(rmap[reason]||('Server said: '+esc(reason))):'';
   document.getElementById('app').innerHTML=`<div style="min-height:100vh;display:grid;place-items:center;padding:40px 24px">
     <div style="width:100%;max-width:460px;display:flex;flex-direction:column;align-items:center;text-align:center">
@@ -227,7 +229,7 @@ function loginView(denied,reason){
       <div id="gbtn" style="min-height:48px;display:grid;place-items:center;width:100%"></div>
       <div id="autherr" style="font-size:12.5px;line-height:1.55;color:var(--color-accent-2-700);max-width:360px;margin-top:16px">${rmsg}</div>
       ${denied?`<button class="btn btn-secondary" onclick="signOut()" style="font-size:12.5px;margin-top:16px">Use a different account</button>`:''}
-      <div style="font-size:12px;color:${MUT(42)};margin-top:36px">Restricted to @${esc(AUTH.domain)} accounts</div>
+      <div style="font-size:12px;color:${MUT(42)};margin-top:36px">Restricted to ${esc(authDomainList())} accounts</div>
     </div></div>`;
   renderGoogleBtn(document.getElementById('gbtn'));
 }
