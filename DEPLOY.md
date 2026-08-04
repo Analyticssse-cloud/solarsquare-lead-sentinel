@@ -143,6 +143,7 @@ git push
 | `QUEUE_TAB`       | *(optional)* audit-export tab name — defaults to `Audit_Queue` |
 | `MAP_TAB`         | *(optional)* mapping tab name — defaults to `LRM_TL_MAP` (currently set to `EmployeeMaster`) |
 | `GOOGLE_CLIENT_ID`| OAuth client ID — **the moment this is set, sign-in is enforced** |
+| `ALLOWED_DOMAIN`  | *(optional)* accepted sign-in domain(s), comma or space separated — defaults to `solarsquare.in homes.solarsquare.in`. Both are accepted out of the box; set this only to narrow it. |
 | `ADMIN_EMAILS`    | comma-separated admins (see the Settings tab) |
 | `BLOB_READ_WRITE_TOKEN` | *(optional)* Vercel Blob token — enables server-side call-recording storage |
 | `OPENAI_API_KEY`  | *(not used — transcription is shelved for now)* |
@@ -187,6 +188,13 @@ No role is ever locked out by an empty queue — a day with nothing flagged show
 state, not an error.
 
 ### Sign-in
+Both Workspace domains sign in: **@solarsquare.in** and **@homes.solarsquare.in**. The two are
+treated as the same person everywhere identity matters — allowlists, `ADMIN_EMAILS`, the
+LRM/TL mapping and the RCA log all fold `@homes.solarsquare.in` onto `@solarsquare.in`, so a
+directory row written for one address matches a login on the other. `ALLOWED_DOMAIN` overrides
+the pair (comma or space separated); Google's account-picker `hd` hint is only applied when
+exactly one domain is configured, otherwise it would hide the second one.
+
 Sign-in only turns on once `GOOGLE_CLIENT_ID` is set. Add the deployed URL
 (`https://<app>.vercel.app`) to the OAuth client's **Authorised JavaScript origins**,
 or Google rejects the login with an `origin` error.
