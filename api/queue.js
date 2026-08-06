@@ -70,7 +70,12 @@ module.exports = async (req, res) => {
 // Determine a user's role from the hierarchy and return only the data they may see.
 function scopeForUser(full, user) {
   if (!user) return { ...full, role: 'none', user: null, meEmail: null };
-  const email = String(user.email || '').toLowerCase();
+  // Normalise the login email the SAME way the hierarchy and the override tabs are keyed
+  // (@homes.solarsquare.in -> @solarsquare.in). Without this a TL who signs in on the
+  // @homes address matched nothing in the org chart, resolved to role 'none' ("No team
+  // mapped") with an empty queue, while Team progress — built from the normalised
+  // hierarchy — still listed their team with its 15 leads assigned.
+  const email = norm(user.email);
   const admins = parseList(process.env.ADMIN_EMAILS);
   const H = full.hierarchy || [];
   const ov = (full.overrides || {})[email] || null;
