@@ -147,6 +147,14 @@ const DEFAULT_AUDITORS=['quality.desk@solarsquare.in'];
 const ADMIN_FALLBACK=['analytics.sse@solarsquare.in'];
 const adminEmails=()=>AUTH.admins&&AUTH.admins.length?AUTH.admins:ADMIN_FALLBACK;
 const nameFromEmail=e=>{const s=String(e||'').split('@')[0];return s.split(/[._]+/).filter(Boolean).map(w=>w[0].toUpperCase()+w.slice(1)).join(' ')||e;};
+// A team-lead/manager display name. Prefer a real human name (has a space, no '@');
+// otherwise derive a clean, title-cased name from the email so a row never shows a raw
+// handle or a full address ("shewale.p@homes.solarsquare.in" -> "Shewale P",
+// "nilesh.solapure" -> "Nilesh Solapure").
+const tlDisp=(name,email)=>{const n=String(name||'').trim();
+  if(n&&n.indexOf('@')<0&&/\s/.test(n))return n.replace(/\b\w/g,c=>c.toUpperCase());
+  const src=(email&&String(email).indexOf('@')>=0)?email:(n||email);
+  return nameFromEmail(src)||n||'Unassigned';};
 const ROLECLS={ADOS:'tag tag-accent-2',ZSM:'tag tag-accent',TL:'tag tag-outline',LRM:'tag tag-neutral'};
 const MON=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 const DOW=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
@@ -161,7 +169,7 @@ const ACTLBL={call:'Call logged',stage_change:'Stage changed',meeting_done:'Meet
 const LEAKLBL={L1:'Meeting date passed, nothing since',L2:'Marked CNC, never re-dialled',L3:'Call-later loop turning, no close',L4:'Closed with no connected call',L4b:'Closed \u2014 check the reason',L5:'DEV started, no meeting ever done',L0:'Watch only'};const silentLbl=l=>{if(l.lastAt==null)return'never touched';const h=l.hoursSilent||0;if(h<24)return h<=1?'active this hour':h+'h silent';return (l.silent||Math.round(h/24))+'d silent';};
 const catObj=k=>CATS.find(c=>c.key===k);
 
-const S={screen:'queue',mtdLvl:'tl',rcaRange:'today',rcaFilter:'pending',rcaTouched:{},actFilter:'open',actBusy:'',recs:{},recBusy:null,rcaLog:[],rcaPending:0,rcaErr:'',diag:null,diagState:'',access:null,accessBusy:'',accessErr:'',accessFilter:'all',newAccessEmail:'',newAccessRole:'auditor',
+const S={screen:'queue',mtdLvl:'tl',rcaRange:'today',rcaFilter:'pending',rcaTouched:{},actFilter:'open',mgrFilter:'all',actBusy:'',recs:{},recBusy:null,rcaLog:[],rcaPending:0,rcaErr:'',diag:null,diagState:'',access:null,accessBusy:'',accessErr:'',accessFilter:'all',newAccessEmail:'',newAccessRole:'auditor',
   setTab:'access',mapping:null,unmapped:[],mapBusy:'',mapErr:'',mapMsg:'',mapQ:'',mapFilter:'overridden',mapSel:{},mapBulkTl:'',auditRaw:'',auditDate:'',tlEmail:null,catKey:'mcch_past',selId:null,audits:{},rcaReview:{},showRules:false,model:null,src:'live',role:'tl',user:null,meEmail:null,hier:[],rcaAuditors:null,newAuditor:'',dirQ:''};
 
 const AUTH={enabled:true,ready:false,clientId:'',domain:'solarsquare.in',domains:['solarsquare.in','homes.solarsquare.in'],admins:[]};
@@ -459,7 +467,7 @@ function buildModel(queue,hier){
     const cname=row.customer_name||('Lead '+row.lead_id);
     const lead={id:row.lead_id,cat:row.category,name:cname,loc:row.cluster,
       meta:(row.cluster||'')+' · '+row.lead_id,LRM:row.lrm_name,ini:ini2(row.customer_name||row.lrm_name||'NA'),lrmIni:ini2(row.lrm_name),
-      urg:urg,days:row.days_overdue||0,tlEmail:tl,tlName:h.tl_name||'Unassigned',
+      urg:urg,days:row.days_overdue||0,tlEmail:tl,tlName:tl==='unassigned'?'Unassigned':tlDisp(h.tl_name,h.tl_email||tl),
       key:Number(row.priority_key)||0,rank:row.category_rank||99,slot:'primary',
       lrmEmail:row.lrm_email||'',
       stage:row.lead_stage||'',status:row.lead_status||'',
@@ -472,7 +480,8 @@ function buildModel(queue,hier){
       loops:Number(row.loop_turns)||0,
       sit:row.category==='not_interested'?(row.meeting_confirmed_at?'met':'early'):row.category==='not_qualified'?(row.qualified_at?'disc':'nodisc'):row.category==='followup_missed'?((row.days_overdue||0)>0?'overdue':'today'):''};
     (leadsByTl[tl]=leadsByTl[tl]||[]).push(lead);
-    tlMeta[tl]=tlMeta[tl]||{name:h.tl_name||'Unassigned',ini:ini2(h.tl_name||'NA'),cluster:h.cluster||row.cluster};
+    const tlNm=tl==='unassigned'?'Unassigned':tlDisp(h.tl_name,h.tl_email||tl);
+    tlMeta[tl]=tlMeta[tl]||{name:tlNm,ini:ini2(tlNm),cluster:h.cluster||row.cluster};
   });
   // Daily pick, per TL: 3 per category pooled across ALL of that TL's LRMs, then top up to
   // 15 from the leftovers (most overdue first) if any category came up short.
@@ -545,7 +554,7 @@ const audited=()=>L().filter(l=>rcaDone(l.id)).length;
 function myTlName(){const t=TLS().find(x=>x.me)||TLS().find(x=>x.email===S.tlEmail);return t?t.name:'You';}
 
 // ---- render ----
-function cutoffLeft(){const now=new Date();const cut=new Date(now);cut.setHours(19,0,0,0);if(now>=cut)cut.setDate(cut.getDate()+1);let s=Math.max(0,Math.floor((cut-now)/1000));const p=n=>String(n).padStart(2,'0');return p(Math.floor(s/3600))+':'+p(Math.floor(s%3600/60))+':'+p(s%60);}
+function cutoffLeft(){const now=new Date();const cut=new Date(now);cut.setHours(21,0,0,0);if(now>=cut)cut.setDate(cut.getDate()+1);let s=Math.max(0,Math.floor((cut-now)/1000));const p=n=>String(n).padStart(2,'0');return p(Math.floor(s/3600))+':'+p(Math.floor(s%3600/60))+':'+p(s%60);}
 function tickTimers(){const t=cutoffLeft();document.querySelectorAll('[data-timer]').forEach(el=>{el.textContent=t;});}
 const MUT=p=>'color-mix(in srgb,var(--color-text) '+p+'%,transparent)';
 // ---- visual vocabulary -----------------------------------------------------
@@ -653,6 +662,16 @@ function beforeCutoff(x){
 function doneByTl(tlEmail){const t=S.auditRaw||'';return (S.rcaLog||[]).filter(x=>String(x.audit_date||'')===t&&norm(x.tl_email)===norm(tlEmail)&&String(x.review_verdict||'')!=='rework'&&beforeCutoff(x)).length;}
 // Sent back by the auditor today — work that has to be done again, so it is not "done".
 function reworkByTl(tlEmail){const t=S.auditRaw||'';return (S.rcaLog||[]).filter(x=>String(x.audit_date||'')===t&&norm(x.tl_email)===norm(tlEmail)&&String(x.review_verdict||'')==='rework').length;}
+// Distinct leads this TL actually cleared today, straight off the shared log — the work
+// tracker's source of truth (NOT cutoff-gated; adherence gating lives in My adherence / MTD).
+// Counts each lead once even if its RCA was re-logged, and drops anything sent back. This is
+// what "Done" in Team progress must equal, so the row matches the RCA log exactly.
+function doneDistinctByTl(tlEmail){const t=String(S.auditRaw||'').slice(0,10),seen={};
+  (S.rcaLog||[]).forEach(x=>{if(String(x.audit_date||'').slice(0,10)!==t)return;
+    if(norm(x.tl_email||'')!==norm(tlEmail))return;
+    if(String(x.review_verdict||'')==='rework')return;
+    seen[String(x.lead_id)]=1;});
+  return Object.keys(seen).length;}
 function mtdStats(){
   const rows=S.rcaLog||[],me=norm((S.user&&S.user.email)||'');
   const mon=(S.auditRaw||new Date().toISOString().slice(0,10)).slice(0,7);
@@ -741,7 +760,7 @@ function mtdBoard(level){
   const tl={};
   const tlEnt=function(te){
     if(!tl[te]){const l=L.line[te]||{};
-      tl[te]={key:te,name:l.tl||nameFromEmail(te)||'Unassigned',cluster:l.cluster||'',
+      tl[te]={key:te,name:tlDisp(l.tl,te),cluster:l.cluster||'',
         ados_email:l.ados_email||'unmapped',ados:l.ados||'Unmapped',
         zsm_email:l.zsm_email||'unmapped',zsm:l.zsm||'Unmapped',
         raw:0,adh:0,actions:0,closed:0,reviewed:0,acc:0,rew:0,deep:0,pairs:{}};}
@@ -753,7 +772,7 @@ function mtdBoard(level){
     const te=norm(x.tl_email||'')||'unmapped';
     if(!inScope(te))return;
     const e=tlEnt(te);
-    if(x.tl_name&&(!L.line[te]||!L.line[te].tl))e.name=x.tl_name;
+    if(x.tl_name&&(!L.line[te]||!L.line[te].tl))e.name=tlDisp(x.tl_name,te);
     e.raw++;
     if(beforeCutoff(x))e.adh++;   // adherence = completions logged before the 9 PM cutoff
     const act=String(x.action||'');
@@ -975,7 +994,7 @@ function nav(){
     </span>
     <span style="display:flex;gap:26px;align-items:baseline;flex-wrap:wrap;row-gap:8px">${screensFor().map(s=>tab(s[0],s[1])).join('')}</span>
     <span style="display:flex;align-items:baseline;flex-wrap:wrap;column-gap:22px;row-gap:6px;font-size:13px;color:${MUT(50)};min-width:0;margin-left:auto;justify-content:flex-end">
-      ${isTL()?`<span>Cutoff 7 PM · <span data-timer style="font-variant-numeric:tabular-nums;color:var(--color-text)">${cutoffLeft()}</span></span>`:''}
+      ${isTL()?`<span>Cutoff ${CUTOFF_LABEL} · <span data-timer style="font-variant-numeric:tabular-nums;color:var(--color-text)">${cutoffLeft()}</span></span>`:''}
       <span style="color:var(--color-text)">${esc(uName)} <span style="color:${MUT(42)}">· ${esc(roleLbl)}</span></span>
       ${AUTH.enabled?`<button data-act="signout" style="background:none;border:none;padding:0;cursor:pointer;font-family:inherit;font-size:13px;color:${MUT(50)};text-decoration:underline">Sign out</button>`:''}
     </span>
@@ -1948,11 +1967,23 @@ function mgrView(){
   // "open" and "sent back" have to be three slices of those same 15 or the row does not add
   // up (sent back read higher than open, because the log carries leads outside the pick).
   const leadsOf=tl=>(S.model&&S.model.leadsByTl[tl])||[];
-  const doneFor=tl=>leadsOf(tl).filter(l=>rcaDone(l.id)).length;
-  const backFor=tl=>leadsOf(tl).filter(l=>reworkOf(l.id)).length;
-  const totAll=tls.reduce((s,t)=>s+t.total,0);
-  const rows=tls.map(t=>{
-    const tot=t.total,dn=Math.min(tot,doneFor(t.email)),back=backFor(t.email),open=tot-dn,mine=t.email===myTl,pc=tot?dn/tot*100:0;
+  const poolOf=tl=>(S.model&&S.model.poolByTl&&S.model.poolByTl[tl])||leadsOf(tl);
+  // "To audit" is the daily target — the 15-lead cap (or the whole pool when it is smaller),
+  // never the volatile recomputed pick, whose cleared-pins fold used to push it past 15.
+  const targetFor=tl=>Math.max(doneDistinctByTl(tl),Math.min(DAILY_CAP,poolOf(tl).length||DAILY_CAP));
+  // "Done" is the shared log's truth: distinct leads cleared today, matching the RCA log.
+  const doneFor=tl=>Math.min(targetFor(tl),doneDistinctByTl(tl));
+  const backFor=tl=>reworkByTl(tl);
+  const mf=S.mgrFilter||'all';
+  const mgrFBtn=(k,l,n)=>`<button data-act="mgrFilter" data-v="${k}" style="background:none;border:none;padding:0 0 3px;cursor:pointer;font-family:inherit;font-size:13.5px;color:${mf===k?'var(--color-text)':MUT(48)};font-weight:${mf===k?'600':'400'};border-bottom:1.5px solid ${mf===k?'var(--color-text)':'transparent'}">${l} <span style="color:${MUT(38)}">${n}</span></button>`;
+  const shownTls=tls.filter(t=>{const tt=targetFor(t.email),dn=doneFor(t.email),p=tt?dn/tt*100:0;
+    return mf==='zero'?dn===0:mf==='below50'?p<50:mf==='open'?dn<tt:mf==='clear'?(tt&&dn>=tt):true;});
+  const totAll=tls.reduce((s,t)=>s+targetFor(t.email),0);
+  const doneAllTeams=tls.reduce((s,t)=>s+doneFor(t.email),0);
+  const totShown=shownTls.reduce((s,t)=>s+targetFor(t.email),0);
+  const doneShown=shownTls.reduce((s,t)=>s+doneFor(t.email),0);
+  const rows=shownTls.map(t=>{
+    const tot=targetFor(t.email),dn=doneFor(t.email),back=backFor(t.email),open=Math.max(0,tot-dn),mine=t.email===myTl,pc=tot?dn/tot*100:0;
     const td=`padding:12px 10px;border-bottom:1px solid var(--color-divider);font-variant-numeric:tabular-nums;text-align:right`;
     const tone=pc>=100?'var(--color-accent)':pc>=50?'var(--color-text)':'var(--color-accent-2)';
     return `<tr class="ls-row">
@@ -1964,12 +1995,12 @@ function mgrView(){
       <td style="${td};${open?'':'color:'+MUT(32)}">${open||'—'}</td>
       <td style="${td};${back?'color:var(--color-accent-800)':'color:'+MUT(32)}">${back||'—'}</td>      ${CATS.map(c=>`<td style="${td};color:${MUT(62)}">${catCount(t.email,c.key)||''}</td>`).join('')}
     </tr>`;}).join('');
-  const catTot=CATS.map(c=>tls.reduce((s,t)=>s+catCount(t.email,c.key),0));
-  const doneAll=tls.reduce((s,t)=>s+doneFor(t.email),0);
+  const catTot=CATS.map(c=>shownTls.reduce((s,t)=>s+catCount(t.email,c.key),0));
+  const doneAll=doneAllTeams;
   const th=`padding:0 10px 9px;font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;font-weight:400;color:${MUT(45)};border-bottom:2px solid var(--color-text)`;
   const head=`<tr><th style="${th};text-align:left;padding-left:0">Team lead</th><th style="${th};text-align:left">Cluster</th><th style="${th};text-align:right">Progress</th><th style="${th};text-align:right">To audit</th><th style="${th};text-align:right">Done</th><th style="${th};text-align:right">Open</th><th style="${th};text-align:right">Sent back</th>${CATS.map(c=>`<th style="${th};text-align:right"><span style="display:inline-flex;align-items:center;gap:5px;justify-content:flex-end">${ic(cstyle(c.key).icon,13,cstyle(c.key).tone)}${esc(c.short||c.name)}</span></th>`).join('')}</tr>`;
   const tdf=`padding:11px 10px;border-bottom:1px solid var(--color-divider);font-variant-numeric:tabular-nums;text-align:right`;
-  const foot=`<tr><td style="${tdf};text-align:left;padding-left:0;font-weight:700;border-bottom:none;border-top:1px solid var(--color-text)">All teams</td><td style="${tdf};border-bottom:none;border-top:1px solid var(--color-text)"></td><td style="${tdf};border-bottom:none;border-top:1px solid var(--color-text)"></td><td style="${tdf};font-weight:700;border-bottom:none;border-top:1px solid var(--color-text)">${totAll}</td><td style="${tdf};font-weight:700;border-bottom:none;border-top:1px solid var(--color-text)">${doneAll}</td><td style="${tdf};font-weight:700;border-bottom:none;border-top:1px solid var(--color-text)">${totAll-doneAll}</td><td style="${tdf};font-weight:700;border-bottom:none;border-top:1px solid var(--color-text)">${tls.reduce((s,t)=>s+backFor(t.email),0)||''}</td>${catTot.map(n=>`<td style="${tdf};font-weight:700;border-bottom:none;border-top:1px solid var(--color-text)">${n||''}</td>`).join('')}</tr>`;
+  const foot=`<tr><td style="${tdf};text-align:left;padding-left:0;font-weight:700;border-bottom:none;border-top:1px solid var(--color-text)">${mf==='all'?'All teams':'Shown ('+shownTls.length+')'}</td><td style="${tdf};border-bottom:none;border-top:1px solid var(--color-text)"></td><td style="${tdf};border-bottom:none;border-top:1px solid var(--color-text)"></td><td style="${tdf};font-weight:700;border-bottom:none;border-top:1px solid var(--color-text)">${totShown}</td><td style="${tdf};font-weight:700;border-bottom:none;border-top:1px solid var(--color-text)">${doneShown}</td><td style="${tdf};font-weight:700;border-bottom:none;border-top:1px solid var(--color-text)">${Math.max(0,totShown-doneShown)}</td><td style="${tdf};font-weight:700;border-bottom:none;border-top:1px solid var(--color-text)">${shownTls.reduce((s,t)=>s+backFor(t.email),0)||''}</td>${catTot.map(n=>`<td style="${tdf};font-weight:700;border-bottom:none;border-top:1px solid var(--color-text)">${n||''}</td>`).join('')}</tr>`;
   if(!tls.length)return `<div class="wrap" style="padding-top:96px"><h2 style="margin:0 0 12px;font-size:34px;font-weight:700">No teams in today’s queue</h2><div style="font-size:15.5px;line-height:1.6;color:${MUT(60)};max-width:56ch;text-wrap:pretty">Nothing has been distributed across teams yet — either today’s export is empty, or its leads aren’t matching the mapping sheet.</div>${diagBlock()}</div>`;
   return `<div class="wrap" style="padding-bottom:80px;animation:lsfade .25s ease">
     <div style="padding:38px 0 28px">
@@ -1983,7 +2014,7 @@ function mgrView(){
         </div>
         <div style="display:flex;gap:44px;flex-wrap:wrap;padding-bottom:4px">
           <div><div style="font-family:var(--font-heading);font-size:30px;line-height:1;font-weight:700;color:${totAll-doneAll?'var(--color-accent-2)':MUT(32)}">${totAll-doneAll}</div><div style="font-size:12px;color:${MUT(52)};padding-top:6px">Still open</div></div>
-          <div><div style="font-family:var(--font-heading);font-size:30px;line-height:1;font-weight:700">${tls.filter(t=>doneFor(t.email)>=t.total&&t.total).length}</div><div style="font-size:12px;color:${MUT(52)};padding-top:6px">Teams clear</div></div>
+          <div><div style="font-family:var(--font-heading);font-size:30px;line-height:1;font-weight:700">${tls.filter(t=>{const tt=targetFor(t.email);return tt&&doneFor(t.email)>=tt;}).length}</div><div style="font-size:12px;color:${MUT(52)};padding-top:6px">Teams clear</div></div>
         </div>
       </div>
       <div style="padding-top:22px;display:flex;align-items:center;gap:16px">
@@ -1991,11 +2022,35 @@ function mgrView(){
         <span style="font-size:12.5px;font-variant-numeric:tabular-nums;color:${MUT(50)}">${totAll?Math.round(doneAll/totAll*100):0}%</span>
       </div>
     </div>
+    <div style="display:flex;align-items:flex-end;gap:22px;flex-wrap:wrap;padding-bottom:14px">
+      <span style="display:flex;align-items:baseline;gap:20px;flex-wrap:wrap;flex:1;min-width:0">
+        ${mgrFBtn('all','All teams',tls.length)}
+        ${mgrFBtn('zero','No audits',tls.filter(t=>doneFor(t.email)===0).length)}
+        ${mgrFBtn('below50','Below 50%',tls.filter(t=>{const tt=targetFor(t.email);return tt&&doneFor(t.email)/tt*100<50;}).length)}
+        ${mgrFBtn('open','Incomplete',tls.filter(t=>doneFor(t.email)<targetFor(t.email)).length)}
+        ${mgrFBtn('clear','Cleared',tls.filter(t=>{const tt=targetFor(t.email);return tt&&doneFor(t.email)>=tt;}).length)}
+      </span>
+      <button data-act="mgrExport" style="display:inline-flex;align-items:center;gap:8px;background:none;border:1px solid var(--color-text);border-radius:2px;padding:8px 14px;cursor:pointer;font-family:inherit;font-size:13px;color:var(--color-text)">${ic('ph-download-simple',15,'var(--color-text)')}Download this view</button>
+    </div>
     <table style="width:100%;border-collapse:collapse;font-size:14px"><thead>${head}</thead><tbody>${rows}${foot}</tbody></table>
     <div style="font-size:12.5px;line-height:1.6;color:${MUT(48)};max-width:76ch;padding-top:20px">Live from today’s queue and the shared RCA log. “Done” counts the latest logged RCA per lead, less anything the Quality auditor sent back${S.rcaPending?` · <b>${S.rcaPending} of yours still syncing</b>`:''}${S.rcaErr?` · <span style="color:var(--color-accent-2-700)">log write failing: ${esc(S.rcaErr)}</span>`:''}</div>
   </div>`;
 }
 
+// Team-progress report: the current filtered view, straight off the same log-based counts
+// the table shows. "No audits" / "Below 50%" / "Incomplete" / "Cleared" each export their slice.
+function exportMgr(){
+  const tls=TLS(),mf=S.mgrFilter||'all';
+  const poolOf=tl=>(S.model&&S.model.poolByTl&&S.model.poolByTl[tl])||(S.model&&S.model.leadsByTl[tl])||[];
+  const targetFor=tl=>Math.max(doneDistinctByTl(tl),Math.min(DAILY_CAP,poolOf(tl).length||DAILY_CAP));
+  const rows=tls.filter(t=>{const tt=targetFor(t.email),dn=Math.min(tt,doneDistinctByTl(t.email)),p=tt?dn/tt*100:0;
+    return mf==='zero'?dn===0:mf==='below50'?p<50:mf==='open'?dn<tt:mf==='clear'?(tt&&dn>=tt):true;})
+    .map(t=>{const tt=targetFor(t.email),dn=Math.min(tt,doneDistinctByTl(t.email)),open=Math.max(0,tt-dn);
+      return [t.name,t.cluster||'',tt,dn,open,reworkByTl(t.email),tt?Math.round(dn/tt*100):0];});
+  const tag=mf==='zero'?'no-audits':mf==='below50'?'below-50pct':mf==='open'?'incomplete':mf==='clear'?'cleared':'all';
+  download('team-progress-'+tag+'-'+(S.auditRaw||'today')+'.csv',
+    csvOf(['team_lead','cluster','to_audit','done','open','sent_back','completion_pct'],rows));
+}
 // ---- events ----
 function patch(id,o){S.audits[id]=Object.assign({reason:'',sev:'',note:'',action:'No action needed',submitted:false,at:''},S.audits[id],o);}
 // Submitting is a deliberate act, not a side effect of typing: the RCA stays a draft until
@@ -2029,6 +2084,8 @@ document.addEventListener('click',e=>{
   else if(act==='exportCsv'){exportCsv(v);}
   else if(act==='actDone'){const p=String(v).split('|');setActionStatus(p[0],p[1],p[2]);}
   else if(act==='actFilter'){S.actFilter=v;render();}
+  else if(act==='mgrFilter'){S.mgrFilter=v;render();}
+  else if(act==='mgrExport'){exportMgr();}
   else if(act==='submitRca'){submitRca(S.selId);}
   else if(act==='reopen'){patch(S.selId,{submitted:false});render();}
   else if(act==='prev'){const dl=catLeads(S.catKey),i=dl.findIndex(x=>x.id===S.selId);S.selId=dl[(i-1+dl.length)%dl.length].id;render();}
