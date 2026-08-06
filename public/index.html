@@ -418,6 +418,30 @@ async function load(){
   if(!(data.queue||[]).length)loadDiag();
 }
 
+// A lead the TL actually RCA-ed today counts as done work even if the recomputed top-3
+// pick no longer holds it — the queue refreshes through the day, so a lead cleared this
+// morning can slip below the cut by afternoon. Fold those cleared-but-dropped leads back
+// into the day's list (from the retained pool) so the "done" count matches the RCA log
+// (15) instead of only crediting leads still in the current pick (13). Rework verdicts do
+// not count — that work has to be redone.
+function withClearedPins(tl,pick,pool){
+  const t=S.auditRaw||'',done={};
+  (S.rcaLog||[]).forEach(x=>{
+    if(String(x.audit_date||'').slice(0,10)!==t)return;
+    if(norm(x.tl_email||'')!==norm(tl))return;
+    if(String(x.review_verdict||'')==='rework')return;
+    done[String(x.lead_id)]=1;});
+  const inPick={};pick.forEach(l=>inPick[String(l.id)]=1);
+  const extra=(pool||[]).filter(l=>done[String(l.id)]&&!inPick[String(l.id)]).map(l=>({...l,slot:'cleared'}));
+  return extra.length?pick.concat(extra):pick;
+}
+// Re-fold cleared leads once the shared RCA log arrives (it loads after buildModel), so the
+// count is right on the first render the TL sees.
+function repinCleared(){
+  const m=S.model;if(!m||!m.pickByTl)return;
+  Object.keys(m.pickByTl).forEach(tl=>{m.leadsByTl[tl]=withClearedPins(tl,m.pickByTl[tl],m.poolByTl[tl]||[]);});
+  (m.tls||[]).forEach(t=>{if(m.leadsByTl[t.email])t.total=m.leadsByTl[t.email].length;});
+}
 function buildModel(queue,hier){
   const H={};hier.forEach(h=>H[norm(h.lrm_email)]=h);
   const base={mcch_past:45,followup_missed:40,not_interested:52,not_qualified:52,mcch_future:34};
@@ -452,13 +476,18 @@ function buildModel(queue,hier){
   });
   // Daily pick, per TL: 3 per category pooled across ALL of that TL's LRMs, then top up to
   // 15 from the leftovers (most overdue first) if any category came up short.
+  // The full pool is retained so a lead the TL already cleared can be folded back into the
+  // day's list even after it slips out of the recomputed top-3 (see withClearedPins).
+  const poolByTl={},pickByTl={};
   Object.keys(leadsByTl).forEach(tl=>{
-    const byCat={};leadsByTl[tl].forEach(l=>(byCat[l.cat]=byCat[l.cat]||[]).push(l));
+    const pool=leadsByTl[tl];poolByTl[tl]=pool;
+    const byCat={};pool.forEach(l=>(byCat[l.cat]=byCat[l.cat]||[]).push(l));
     const rank=(a,b)=>(b.key-a.key)||(b.urg-a.urg)||(b.days-a.days);
     let keep=[],rest=[];
-    CATS.forEach(c=>{const pool=(byCat[c.key]||[]).slice().sort(rank);keep=keep.concat(pool.slice(0,DAILY_PER_CAT));rest=rest.concat(pool.slice(DAILY_PER_CAT));});
+    CATS.forEach(c=>{const p=(byCat[c.key]||[]).slice().sort(rank);keep=keep.concat(p.slice(0,DAILY_PER_CAT));rest=rest.concat(p.slice(DAILY_PER_CAT));});
     if(keep.length<DAILY_CAP)rest.sort((a,b)=>(b.days-a.days)||rank(a,b)).slice(0,DAILY_CAP-keep.length).forEach(l=>keep.push({...l,slot:'backfill'}));
-    leadsByTl[tl]=keep;
+    pickByTl[tl]=keep;
+    leadsByTl[tl]=withClearedPins(tl,keep,pool);
   });
   const lrmsByTl={},lrmRiskByTl={};
   Object.keys(leadsByTl).forEach(tl=>{
@@ -474,7 +503,7 @@ function buildModel(queue,hier){
   const tls=Object.keys(leadsByTl).map((tl,i)=>{const ls=leadsByTl[tl],m=tlMeta[tl],od=ls.filter(l=>l.days>2).length;
     return{email:tl,name:m.name,ini:m.ini,cluster:m.cluster,total:ls.length,me:tl===meTl,
       topGap:topCat(ls)};});
-  S.model={leadsByTl,lrmsByTl,lrmRiskByTl,tls,curTl};S.tlEmail=curTl;S.hier=hier||[];
+  S.model={leadsByTl,lrmsByTl,lrmRiskByTl,tls,curTl,poolByTl,pickByTl};S.tlEmail=curTl;S.hier=hier||[];
   const mine=(curTl&&leadsByTl[curTl])||[];
   const first=(mine.filter(l=>l.cat==='mcch_past').sort((a,b)=>(b.key-a.key)||(b.silent-a.silent))[0]||mine[0]||{});
   S.selId=first.id||null;
@@ -605,11 +634,23 @@ async function loadRcaLog(){
           assignee:x.reassigned_to||'',notified:!!x.reassigned_to,
           by:x.reviewer_name||nameFromEmail(x.reviewer_email||''),at:x.reviewed_at||'',saved:true},S.rcaReview[k]);}
     });
+    repinCleared();
     render();
   }catch(e){}
 }
-// per-team completion, straight off the shared log
-function doneByTl(tlEmail){const t=S.auditRaw||'';return (S.rcaLog||[]).filter(x=>String(x.audit_date||'')===t&&norm(x.tl_email)===norm(tlEmail)&&String(x.review_verdict||'')!=='rework').length;}
+// Adherence deadline: an RCA counts toward adherence only if it was logged before 9 PM
+// IST on its audit date. 21:00 IST == 15:30 UTC. Rows with no timestamp (legacy) or no
+// audit date are treated as on time. This gates the adherence numbers only — the queue
+// work-tracker still credits everything the TL cleared, whenever they cleared it.
+const CUTOFF_LABEL='9 PM';
+function beforeCutoff(x){
+  const d=String(x&&x.audit_date||'').slice(0,10),t=x&&x.logged_at;
+  if(!d||!t)return true;
+  const ms=Date.parse(t);if(isNaN(ms))return true;
+  return ms<=Date.parse(d+'T15:30:00.000Z');
+}
+// per-team completion, straight off the shared log — adherence, so cutoff-gated
+function doneByTl(tlEmail){const t=S.auditRaw||'';return (S.rcaLog||[]).filter(x=>String(x.audit_date||'')===t&&norm(x.tl_email)===norm(tlEmail)&&String(x.review_verdict||'')!=='rework'&&beforeCutoff(x)).length;}
 // Sent back by the auditor today — work that has to be done again, so it is not "done".
 function reworkByTl(tlEmail){const t=S.auditRaw||'';return (S.rcaLog||[]).filter(x=>String(x.audit_date||'')===t&&norm(x.tl_email)===norm(tlEmail)&&String(x.review_verdict||'')==='rework').length;}
 function mtdStats(){
@@ -703,7 +744,7 @@ function mtdBoard(level){
       tl[te]={key:te,name:l.tl||nameFromEmail(te)||'Unassigned',cluster:l.cluster||'',
         ados_email:l.ados_email||'unmapped',ados:l.ados||'Unmapped',
         zsm_email:l.zsm_email||'unmapped',zsm:l.zsm||'Unmapped',
-        raw:0,actions:0,closed:0,reviewed:0,acc:0,rew:0,deep:0,pairs:{}};}
+        raw:0,adh:0,actions:0,closed:0,reviewed:0,acc:0,rew:0,deep:0,pairs:{}};}
     return tl[te];};
   // seed every TL that exists, not only those who logged something — a team that did
   // nothing all month is the row a manager most needs to see.
@@ -714,6 +755,7 @@ function mtdBoard(level){
     const e=tlEnt(te);
     if(x.tl_name&&(!L.line[te]||!L.line[te].tl))e.name=x.tl_name;
     e.raw++;
+    if(beforeCutoff(x))e.adh++;   // adherence = completions logged before the 9 PM cutoff
     const act=String(x.action||'');
     if(act&&act!=='No action needed'){e.actions++;if(String(x.action_status||'')==='done')e.closed++;}
     // Quality, measured from what people actually did: the auditor's verdict, and whether
@@ -725,7 +767,7 @@ function mtdBoard(level){
   });
   // clamp here, once: a TL cannot clear more than the queue issued them
   Object.keys(tl).forEach(function(te){const e=tl[te];
-    e.done=Math.min(e.raw,capPerTl);
+    e.done=Math.min(e.adh,capPerTl);
     let rep=0;Object.keys(e.pairs).forEach(function(p){if(e.pairs[p]>1)rep+=e.pairs[p];});
     e.rep=Math.min(rep,e.raw);});
 
@@ -1221,6 +1263,10 @@ function auditPanel(){
 
 function adherView(){
   const total=L().length,done=audited(),miss=total-done;
+  // Adherence is what was cleared BEFORE the 9 PM cutoff; late RCAs are still logged work
+  // (the "Logged today" stat) but do not count toward the on-time bar.
+  const onTime=L().filter(l=>{if(reworkOf(l.id))return false;const r=logRow(l.id);return r?beforeCutoff(r):false;}).length;
+  const late=Math.max(0,done-onTime);
   const actionsSet=L().filter(l=>{const x=S.audits[l.id];return x&&x.reason&&x.action&&x.action!=='No action needed';}).length;
   const hi=L().filter(l=>{const x=S.audits[l.id];return x&&x.reason&&x.fault==='system';}).length;
   const mtd=mtdStats();
@@ -1246,12 +1292,13 @@ function adherView(){
   const emptyLrm=`<div style="padding:10px 0;font-size:13px;color:${MUT(45)}">No LRMs in today’s queue.</div>`;
   return `<div class="wrap" style="padding-bottom:80px;animation:lsfade .25s ease">
     <div style="padding:38px 0 26px">
-      ${kicker(esc(S.auditDate||'Today')+' &middot; same-day cutoff at 7 PM',10)}
+      ${kicker(esc(S.auditDate||'Today')+' &middot; same-day cutoff at '+CUTOFF_LABEL,10)}
       <h2 style="margin:0;font-family:var(--font-heading);font-size:44px;line-height:1;font-weight:700;letter-spacing:-.02em">My adherence</h2>
       <div style="padding-top:20px;display:flex;align-items:center;gap:16px;max-width:640px">
-        <span style="flex:1">${bar(total?done/total*100:0,done===total&&total?'var(--color-accent)':'var(--color-text)')}</span>
-        <span style="font-size:12.5px;font-variant-numeric:tabular-nums;color:${MUT(50)}">${total?Math.round(done/total*100):0}% of today</span>
+        <span style="flex:1">${bar(total?onTime/total*100:0,onTime===total&&total?'var(--color-accent)':'var(--color-text)')}</span>
+        <span style="font-size:12.5px;font-variant-numeric:tabular-nums;color:${MUT(50)}">${total?Math.round(onTime/total*100):0}% cleared before ${CUTOFF_LABEL}</span>
       </div>
+      ${late?`<div style="font-size:12.5px;color:var(--color-accent-2-800);padding-top:10px">${late} RCA${late===1?'':'s'} logged after the ${CUTOFF_LABEL} cutoff — not counted toward adherence.</div>`:''}
     </div>
     <div style="display:flex;gap:64px;flex-wrap:wrap;padding-bottom:46px">
       ${stat(done+' <span style="color:'+MUT(30)+'">/ '+total+'</span>','Logged today',miss?miss+' still open':(total?'all clear':''),'ph-check-square',miss?MUT(38):'var(--color-accent)')}
