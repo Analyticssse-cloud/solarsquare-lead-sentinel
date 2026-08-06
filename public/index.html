@@ -1312,6 +1312,7 @@ function auditPanel(){
 
 function adherView(){
   const total=L().length,done=audited(),miss=total-done;
+  const pend=pendingRca(),synced=Math.max(0,done-pend);
   // Adherence is what was cleared BEFORE the 9 PM cutoff; late RCAs are still logged work
   // (the "Logged today" stat) but do not count toward the on-time bar.
   const onTime=L().filter(l=>{if(reworkOf(l.id))return false;const r=logRow(l.id);return r?beforeCutoff(r):false;}).length;
@@ -1348,6 +1349,7 @@ function adherView(){
         <span style="font-size:12.5px;font-variant-numeric:tabular-nums;color:${MUT(50)}">${total?Math.round(onTime/total*100):0}% cleared before ${CUTOFF_LABEL}</span>
       </div>
       ${late?`<div style="font-size:12.5px;color:var(--color-accent-2-800);padding-top:10px">${late} RCA${late===1?'':'s'} logged after the ${CUTOFF_LABEL} cutoff — not counted toward adherence.</div>`:''}
+      ${pend?`<div style="font-size:12.5px;color:var(--color-accent-2-800);padding-top:10px;display:flex;align-items:center;gap:9px;flex-wrap:wrap">${ic('ph-cloud-warning',15,'var(--color-accent-2-700)')}<span>${pend} not yet synced to the shared log — the log shows ${synced} of your ${done}.${S.rcaErr?' ('+esc(S.rcaErr)+')':''}</span><button data-act="rcaRetry" style="background:none;border:1px solid var(--color-accent-2-700);border-radius:2px;padding:4px 10px;cursor:pointer;font-family:inherit;font-size:12px;color:var(--color-accent-2-800)">Retry sync</button></div>`:''}
     </div>
     <div style="display:flex;gap:64px;flex-wrap:wrap;padding-bottom:46px">
       ${stat(done+' <span style="color:'+MUT(30)+'">/ '+total+'</span>','Logged today',miss?miss+' still open':(total?'all clear':''),'ph-check-square',miss?MUT(38):'var(--color-accent)')}
